@@ -295,38 +295,50 @@ if streak_data is not None and not streak_data.empty:
         # Show active streaks section
         st.subheader(f"🔥 Active Hit Streaks ({len(filtered_data)} players)")
         
-        # Format dataframe for display
-        display_df = filtered_data.copy()
+        # Create two columns for main display and sidebar
+        col1, col2 = st.columns([7, 3])
         
-        # Add MLB.com player URLs - these will open in a new tab
-        display_df['Name'] = display_df.apply(
-            lambda row: f"[{row['Name']}](https://www.mlb.com/player/{row['playerid']} 'View player profile')", 
-            axis=1
-        )
+        with col1:
+            # Format dataframe for display
+            display_df = filtered_data.copy()
+            
+            # Select and rename columns for the main table
+            table_df = display_df[['Name', 'Team', 'position', 'Current_Streak', 'Last_10', 'Max_Hit_Streak', 'AVG']]
+            
+            # Add rank column
+            table_df.insert(0, 'Rank', range(1, len(table_df) + 1))
+            
+            # Rename columns for display
+            column_rename = {
+                'Current_Streak': 'Current Streak',
+                'Max_Hit_Streak': 'Season Best',
+                'Last_10': 'Hits in Last 10',
+                'position': 'Pos',
+                'AVG': 'Avg'
+            }
+            
+            # Rename columns
+            table_df = table_df.rename(columns=column_rename)
+            
+            # Display the table
+            st.dataframe(table_df, use_container_width=True, hide_index=True)
         
-        # Select and rename columns
-        display_df = display_df[['Name', 'Team', 'position', 'Current_Streak', 'Last_10', 'Max_Hit_Streak', 'AVG', 'AB', 'H']]
-        
-        # Add rank column
-        display_df.insert(0, 'Rank', range(1, len(display_df) + 1))
-        
-        # Rename columns for display
-        column_rename = {
-            'Current_Streak': 'Current Streak',
-            'Max_Hit_Streak': 'Season Best',
-            'Last_10': 'Hits in Last 10',
-            'position': 'Pos',
-            'AB': 'At Bats',
-            'H': 'Hits',
-            'AVG': 'Batting Avg'
-        }
-        
-        # Rename columns
-        display_df = display_df.rename(columns=column_rename)
-        
-        # Display the table with markdown enabled to make links clickable
-        st.markdown(display_df.to_markdown(index=False), unsafe_allow_html=True)
-        
+        with col2:
+            st.subheader("Player Links")
+            
+            # Top 5 streaks get highlighted
+            top_n = min(5, len(filtered_data))
+            top_players = filtered_data.head(top_n)
+            
+            for _, row in top_players.iterrows():
+                st.markdown(f"**[{row['Name']}](https://www.mlb.com/player/{row['playerid']})** - {row['Current_Streak']} games")
+            
+            # Rest of the players
+            if len(filtered_data) > top_n:
+                st.markdown("---")
+                for _, row in filtered_data.iloc[top_n:].iterrows():
+                    st.markdown(f"[{row['Name']}](https://www.mlb.com/player/{row['playerid']}) - {row['Current_Streak']} games")
+                
         # Add DiMaggio reference
         st.markdown("---")
         st.markdown("#### Joe DiMaggio's MLB record is 56 consecutive games with a hit (1941)")
