@@ -128,7 +128,7 @@ def get_games_for_date(date=None):
 
 def get_team_roster(team_code):
     """Get roster for a team"""
-    endpoint = "getMLBRoster"
+    endpoint = "getMLBTeamRoster"
     params = {
         "teamAbr": team_code,
         "season": str(datetime.now().year)
