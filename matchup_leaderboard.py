@@ -116,13 +116,25 @@ def get_games_for_date(date=None):
         "gameDate": date_str
     }
     
+    if debug_mode:
+        st.sidebar.markdown(f"Fetching games for date: {date_str}")
+        
     games_data = fetch_from_rapidapi(endpoint, params)
     
     if debug_mode:
-        if games_data and games_data.get('body'):
-            st.sidebar.markdown(f"Found {len(games_data.get('body', []))} games for {date.strftime('%Y-%m-%d')}")
+        if games_data:
+            st.sidebar.markdown(f"API Response Status: {games_data.get('statusCode')}")
+            if games_data.get('body'):
+                st.sidebar.markdown(f"Found {len(games_data.get('body', []))} games for {date.strftime('%Y-%m-%d')}")
+                # Show first game details to verify structure
+                if len(games_data.get('body', [])) > 0:
+                    first_game = games_data.get('body')[0]
+                    st.sidebar.markdown("First game data structure:")
+                    st.sidebar.json(first_game)
+            else:
+                st.sidebar.markdown(f"No games found for {date.strftime('%Y-%m-%d')}")
         else:
-            st.sidebar.markdown(f"No games found for {date.strftime('%Y-%m-%d')}")
+            st.sidebar.markdown("No response from games API")
     
     return games_data
 
@@ -187,13 +199,23 @@ def process_matchups(game_date=None):
         # Extract probable pitchers directly from the game data
         probable_pitchers = game.get("probableStartingPitchers", {})
         
+        if debug_mode:
+            st.sidebar.markdown(f"Game ID: {game.get('gameID')}")
+            st.sidebar.markdown(f"Probable pitchers field: {probable_pitchers}")
+        
         # Extract home and away pitcher IDs
         home_pitcher_id = probable_pitchers.get("home")
         away_pitcher_id = probable_pitchers.get("away")
         
+        if debug_mode:
+            st.sidebar.markdown(f"Home pitcher ID: {home_pitcher_id}")
+            st.sidebar.markdown(f"Away pitcher ID: {away_pitcher_id}")
+        
         # If we don't have probable pitchers, skip this game
         if not home_pitcher_id or not away_pitcher_id:
             progress_text.text(f"Skipping game (no probable pitchers): {away_team_name} @ {home_team_name}")
+            if debug_mode:
+                st.sidebar.markdown(f"Skipping game due to missing pitcher(s): {away_team_name} @ {home_team_name}")
             continue
             
         # Get roster data to find pitcher names
@@ -386,7 +408,7 @@ min_avg = st.sidebar.slider(
 if st.sidebar.button("🔄 Refresh Data"):
     st.session_state.matchup_data = None
     st.session_state.last_update = datetime.now()
-    st.experimental_rerun()
+    st.rerun()
 
 # Main content
 if RAPIDAPI_KEY:
@@ -514,7 +536,7 @@ if RAPIDAPI_KEY:
             st.subheader("API Connectivity Test")
             if st.button("Test API Connection"):
                 # Try a simple endpoint that should return data
-                test_endpoint = "getMLBHelp"
+                test_endpoint = "getMLBScoreboard"
                 test_result = fetch_from_rapidapi(test_endpoint)
                 
                 if test_result:
