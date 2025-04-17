@@ -389,11 +389,13 @@ def get_batter_vs_pitcher(batter_id, pitcher_id):
             stats = pitcher_matchup.get("stats", {})
             
             if debug_mode:
-                at_bats = stats.get("atBats", 0)
-                hits = stats.get("hits", 0)
-                avg = stats.get("avg", "0.000")
+                # Using correct field names from the API response
+                at_bats = stats.get("AB", 0)
+                hits = stats.get("H", 0)
+                avg = stats.get("AVG", "0.000")
                 st.sidebar.markdown(f"✅ Found matchup: Batter {batter_id} vs Pitcher {pitcher_id}: AB={at_bats}, H={hits}, AVG={avg}")
             
+            # No need to change the structure - just pass through the stats as is
             result = {
                 "statusCode": 200,
                 "body": {"stats": stats}
@@ -412,9 +414,10 @@ def get_batter_vs_pitcher(batter_id, pitcher_id):
             st.sidebar.markdown("⚠️ No matchup data returned")
     
     # Create a fake result with minimal stats so the app can continue
+    # Using the correct field names from the API
     empty_result = {
         "statusCode": 200,
-        "body": {"stats": {"atBats": "0", "hits": "0", "avg": "0.000"}}
+        "body": {"stats": {"AB": "0", "H": "0", "AVG": "0.000", "HR": "0", "2B": "0", "3B": "0"}}
     }
     
     # Cache this empty result to avoid redundant API calls
@@ -714,15 +717,16 @@ def process_matchup(batter_id, batter_name, pitcher_id, pitcher_name,
             st.sidebar.markdown(f"Matchup stats found: {stats}")
         
         try:
-            ab = int(stats.get("atBats", 0))
+            # Use the correct field names from the API response
+            ab = int(stats.get("AB", 0))
             
             if debug_mode:
                 st.sidebar.markdown(f"At bats: {ab}")
             
             # We'll collect ALL matchups and filter later with the slider
-            hits = int(stats.get("hits", 0))
-            avg = stats.get("avg", "0.000")
-            hr = int(stats.get("homeruns", 0))
+            hits = int(stats.get("H", 0))
+            avg = stats.get("AVG", "0.000")
+            hr = int(stats.get("HR", 0))
             
             if debug_mode:
                 st.sidebar.markdown(f"✅ Adding matchup: {batter_name} ({hits}/{ab}, {avg})")
