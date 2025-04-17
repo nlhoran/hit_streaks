@@ -363,33 +363,25 @@ def get_batter_vs_pitcher(batter_id, pitcher_id):
         
         if debug_mode:
             st.sidebar.markdown(f"Looking for pitcher {pitcher_id} in batter {batter_id}'s matchups")
-            if isinstance(matchups, dict) and "matchups" in matchups:
-                st.sidebar.markdown(f"Found {len(matchups['matchups'])} matchups for batter {batter_id}")
-            elif isinstance(matchups, list):
-                st.sidebar.markdown(f"Found {len(matchups)} matchups for batter {batter_id}")
+            if isinstance(matchups, dict) and "opponents" in matchups:
+                st.sidebar.markdown(f"Found {len(matchups['opponents'])} opponent matchups for batter {batter_id}")
+                # Display a sample opponent to see the structure
+                if len(matchups['opponents']) > 0:
+                    st.sidebar.markdown("Sample opponent data structure:")
+                    st.sidebar.json(matchups['opponents'][0])
             elif isinstance(matchups, dict):
                 st.sidebar.markdown(f"Matchup data structure: {list(matchups.keys())}")
         
         # Try to find the matchup with this pitcher
-        # Check different possible response structures
+        # Based on the actual response structure
         pitcher_matchup = None
         
-        # Structure 1: { matchups: [{pitcher: id, stats: {}}] }
-        if isinstance(matchups, dict) and "matchups" in matchups:
-            for matchup in matchups["matchups"]:
-                if str(matchup.get("pitcher")) == str(pitcher_id):
-                    pitcher_matchup = matchup
-                    break
-                    
-        # Structure 2: { pitcherID: {stats} }
-        elif isinstance(matchups, dict) and str(pitcher_id) in matchups:
-            pitcher_matchup = {"stats": matchups[str(pitcher_id)]}
-            
-        # Structure 3: [{ pitcher: id, stats: {}}]
-        elif isinstance(matchups, list):
-            for matchup in matchups:
-                if str(matchup.get("pitcher")) == str(pitcher_id):
-                    pitcher_matchup = matchup
+        # Structure: { playerID: "123", opponents: [{ playerID: "456", stats: {...} }] }
+        if isinstance(matchups, dict) and "opponents" in matchups:
+            opponents = matchups.get("opponents", [])
+            for opponent in opponents:
+                if str(opponent.get("playerID")) == str(pitcher_id):
+                    pitcher_matchup = opponent
                     break
         
         # If we found the matchup
