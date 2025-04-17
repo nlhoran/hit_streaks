@@ -155,12 +155,22 @@ def get_teams_data():
     if teams_data and teams_data.get("statusCode") == 200:
         if debug_mode:
             st.sidebar.markdown(f"Successfully fetched MLB teams data")
+            if teams_data.get("body"):
+                st.sidebar.markdown(f"Found {len(teams_data.get('body'))} teams")
+                # Display first team as example
+                if len(teams_data.get("body")) > 0:
+                    first_team = teams_data.get("body")[0]
+                    st.sidebar.markdown(f"Sample team: {first_team.get('city', '')} {first_team.get('nickname', '')} ({first_team.get('abbreviation', '')})")
             
         st.session_state.teams_data = teams_data
         return teams_data
     else:
         if debug_mode:
             st.sidebar.markdown("Failed to fetch MLB teams data")
+            if teams_data:
+                st.sidebar.markdown(f"Status code: {teams_data.get('statusCode')}")
+                if teams_data.get('error'):
+                    st.sidebar.markdown(f"Error: {teams_data.get('error')}")
         return None
 
 def get_team_id_from_abbreviation(team_code):
@@ -185,74 +195,79 @@ def get_team_id_from_abbreviation(team_code):
     return None
 
 def get_team_roster(team_code):
-    """Get roster for a team"""
-    # First, try to get the team ID if possible
+    """Get roster for a team using documented format"""
+    # According to documentation, need either teamAbv or teamID
+    endpoint = "getMLBTeamRoster"
+    
+    # First try with team abbreviation (exactly as documented)
+    params = {
+        "teamAbv": team_code,  # This is the documented parameter name
+        "statsToGet": "true"   # Get stats for each player
+    }
+    
+    if debug_mode:
+        st.sidebar.markdown(f"Getting roster for {team_code} using documented params")
+    
+    roster_data = fetch_from_rapidapi(endpoint, params)
+    
+    # Check if the call was successful
+    if roster_data and roster_data.get("statusCode") == 200:
+        if debug_mode:
+            if roster_data.get("body") and roster_data.get("body").get("roster"):
+                roster = roster_data.get("body", {}).get("roster", [])
+                st.sidebar.markdown(f"✅ Success! Found {len(roster)} players")
+                
+                # Show a sample player if available
+                if len(roster) > 0:
+                    st.sidebar.markdown(f"Sample player: {roster[0].get('longName', roster[0].get('playerID', 'Unknown'))}")
+            elif roster_data.get("error"):
+                st.sidebar.markdown(f"⚠️ API returned error: {roster_data.get('error')}")
+            else:
+                st.sidebar.markdown("⚠️ API returned empty roster")
+        
+        return roster_data
+    elif debug_mode:
+        st.sidebar.markdown(f"❌ Failed to get roster for {team_code}")
+        if roster_data:
+            if roster_data.get("error"):
+                st.sidebar.markdown(f"Error: {roster_data.get('error')}")
+    
+    # If that failed, try with team ID if we can get it
     team_id = get_team_id_from_abbreviation(team_code)
     
-    # Try various combinations of endpoints and parameters
-    attempts = [
-        # First try with the team ID if available
-        {
-            "endpoint": "getMLBTeamRoster",
-            "params": {"teamID": team_id} if team_id else None,
-            "description": f"getMLBTeamRoster with teamID={team_id}" if team_id else None
-        },
-        # Try documentation-mentioned endpoint with team code
-        {
-            "endpoint": "getMLBTeamRoster",
-            "params": {"teamAbr": team_code},
-            "description": f"getMLBTeamRoster with teamAbr={team_code}"
-        },
-        # Try with just the team abbreviation
-        {
-            "endpoint": "getMLBTeamRoster", 
-            "params": {"team": team_code},
-            "description": f"getMLBTeamRoster with team={team_code}"
-        },
-        # Try alternative endpoint
-        {
-            "endpoint": "getMLBRoster",
-            "params": {"teamAbr": team_code},
-            "description": f"getMLBRoster with teamAbr={team_code}"
-        },
-        # Try with team abbreviation parameter
-        {
-            "endpoint": "getMLBRoster",
-            "params": {"team": team_code},
-            "description": f"getMLBRoster with team={team_code}"
-        },
-    ]
-    
-    # Try each combination until one works
-    for attempt in attempts:
-        if not attempt["params"]:
-            continue
-            
+    if team_id:
         if debug_mode:
-            st.sidebar.markdown(f"Trying {attempt['description']}")
+            st.sidebar.markdown(f"Trying with teamID={team_id}")
+            
+        params = {
+            "teamID": team_id,
+            "statsToGet": "true"
+        }
         
-        roster_data = fetch_from_rapidapi(attempt["endpoint"], attempt["params"])
+        roster_data = fetch_from_rapidapi(endpoint, params)
         
         if roster_data and roster_data.get("statusCode") == 200:
             if debug_mode:
-                st.sidebar.markdown(f"✅ Success with {attempt['description']}")
-                # If body contains data, show sample
-                if roster_data.get("body") and len(roster_data.get("body")) > 0:
-                    st.sidebar.markdown(f"Found {len(roster_data.get('body'))} players")
-                    st.sidebar.markdown(f"Sample player: {roster_data.get('body')[0].get('longName', 'Unknown')}")
+                if roster_data.get("body") and roster_data.get("body").get("roster"):
+                    roster = roster_data.get("body", {}).get("roster", [])
+                    st.sidebar.markdown(f"✅ Success with teamID! Found {len(roster)} players")
+                    
+                    # Show a sample player if available
+                    if len(roster) > 0:
+                        st.sidebar.markdown(f"Sample player: {roster[0].get('longName', roster[0].get('playerID', 'Unknown'))}")
+                elif roster_data.get("error"):
+                    st.sidebar.markdown(f"⚠️ API returned error: {roster_data.get('error')}")
+                else:
+                    st.sidebar.markdown("⚠️ API returned empty roster")
             return roster_data
-        elif debug_mode:
-            status = roster_data.get("statusCode") if roster_data else "No response"
-            st.sidebar.markdown(f"❌ Failed with {attempt['description']}: {status}")
     
-    # As a last resort, implement fallback roster data
+    # As a last resort, return minimal data
     if debug_mode:
-        st.sidebar.markdown(f"All roster endpoints failed, using fallback data for {team_code}")
+        st.sidebar.markdown(f"All roster attempts failed for {team_code}, using fallback")
     
-    # Create minimal fallback data just to allow the app to continue
     return {
         "statusCode": 200,
-        "body": []
+        "body": {"roster": []}
     }
 
 # No longer needed - we get pitchers directly from game data
@@ -269,54 +284,44 @@ def get_batter_vs_pitcher(batter_id, pitcher_id):
     if cache_key in st.session_state.matchup_cache:
         return st.session_state.matchup_cache[cache_key]
     
-    # Try various combinations of endpoints and parameters
-    attempts = [
-        # First try with the standard parameter naming
-        {
-            "endpoint": "getMLBBatterVsPitcher",
-            "params": {"batterID": str(batter_id), "pitcherID": str(pitcher_id)},
-            "description": f"getMLBBatterVsPitcher with batterID/pitcherID"
-        },
-        # Try alternative parameter naming
-        {
-            "endpoint": "getMLBBatterVsPitcher", 
-            "params": {"batter": str(batter_id), "pitcher": str(pitcher_id)},
-            "description": f"getMLBBatterVsPitcher with batter/pitcher"
-        },
-        # Try alternative endpoint
-        {
-            "endpoint": "getBatterVsPitcher",
-            "params": {"batterID": str(batter_id), "pitcherID": str(pitcher_id)},
-            "description": f"getBatterVsPitcher with batterID/pitcherID"
-        },
-    ]
+    # Use the single, most likely correct endpoint based on other calls
+    endpoint = "getMLBBatterVsPitcher"
+    params = {
+        "batterID": str(batter_id),
+        "pitcherID": str(pitcher_id)
+    }
     
-    # Try each combination until one works
-    for attempt in attempts:
+    if debug_mode:
+        st.sidebar.markdown(f"Getting BvP data for batter {batter_id} vs pitcher {pitcher_id}")
+    
+    matchup_data = fetch_from_rapidapi(endpoint, params)
+    
+    # Check if we got valid data
+    if matchup_data and matchup_data.get("statusCode") == 200:
         if debug_mode:
-            st.sidebar.markdown(f"Trying {attempt['description']}")
+            if matchup_data.get("body") and matchup_data.get("body").get("stats"):
+                stats = matchup_data.get("body", {}).get("stats", {})
+                st.sidebar.markdown(f"✅ BvP data found: AB={stats.get('atBats', 0)}, H={stats.get('hits', 0)}, AVG={stats.get('avg', '0.000')}")
+            elif matchup_data.get("error"):
+                st.sidebar.markdown(f"⚠️ API returned error: {matchup_data.get('error')}")
+            else:
+                st.sidebar.markdown("⚠️ API returned success but no matchup stats")
         
-        matchup_data = fetch_from_rapidapi(attempt["endpoint"], attempt["params"])
-        
-        if matchup_data and matchup_data.get("statusCode") == 200:
-            if debug_mode:
-                if matchup_data.get("body") and matchup_data.get("body").get("stats"):
-                    stats = matchup_data.get("body", {}).get("stats", {})
-                    st.sidebar.markdown(f"✅ Success with {attempt['description']}: AB={stats.get('atBats', 0)}, H={stats.get('hits', 0)}")
-                else:
-                    st.sidebar.markdown(f"✅ Success with {attempt['description']} but no stats data")
-            
-            # Cache this result
-            st.session_state.matchup_cache[cache_key] = matchup_data
-            return matchup_data
-        elif debug_mode:
-            status = matchup_data.get("statusCode") if matchup_data else "No response"
-            st.sidebar.markdown(f"❌ Failed with {attempt['description']}: {status}")
+        # Cache this result
+        st.session_state.matchup_cache[cache_key] = matchup_data
+        return matchup_data
+    elif debug_mode:
+        if matchup_data:
+            st.sidebar.markdown(f"❌ BvP request failed: status={matchup_data.get('statusCode')}")
+            if matchup_data.get("error"):
+                st.sidebar.markdown(f"Error: {matchup_data.get('error')}")
+        else:
+            st.sidebar.markdown("❌ No response for BvP request")
     
-    # If all attempts failed, return an empty result
+    # If the call failed, return a valid but empty result
     empty_result = {
         "statusCode": 200,
-        "body": None
+        "body": {"stats": {"atBats": "0", "hits": "0", "avg": "0.000"}}
     }
     
     # Cache this result to avoid repeated failures
@@ -394,20 +399,44 @@ def process_matchups(game_date=None):
         
         # Debug roster information
         if debug_mode:
-            if home_roster_data and home_roster_data.get("body"):
-                st.sidebar.markdown(f"Home roster players: {len(home_roster_data.get('body', []))}")
+            # Check home roster
+            if home_roster_data and home_roster_data.get("statusCode") == 200:
+                if home_roster_data.get("body") and home_roster_data.get("body").get("roster"):
+                    roster = home_roster_data.get("body").get("roster", [])
+                    st.sidebar.markdown(f"Home roster players: {len(roster)}")
+                    if len(roster) > 0:
+                        st.sidebar.markdown(f"Sample home player: {roster[0].get('longName', roster[0].get('playerID', 'Unknown'))}")
+                        # Show first player's structure for debugging
+                        st.sidebar.markdown("Sample home player structure:")
+                        st.sidebar.json(roster[0])
+                elif home_roster_data.get("error"):
+                    st.sidebar.markdown(f"⚠️ Home roster error: {home_roster_data.get('error')}")
+                else:
+                    st.sidebar.markdown(f"⚠️ Home roster empty for {home_team_code}")
             else:
-                st.sidebar.markdown(f"❌ No home roster data for {home_team_code}")
+                st.sidebar.markdown(f"❌ No valid home roster data for {home_team_code}")
                 
-            if away_roster_data and away_roster_data.get("body"):
-                st.sidebar.markdown(f"Away roster players: {len(away_roster_data.get('body', []))}")
+            # Check away roster
+            if away_roster_data and away_roster_data.get("statusCode") == 200:
+                if away_roster_data.get("body") and away_roster_data.get("body").get("roster"):
+                    roster = away_roster_data.get("body").get("roster", [])
+                    st.sidebar.markdown(f"Away roster players: {len(roster)}")
+                    if len(roster) > 0:
+                        st.sidebar.markdown(f"Sample away player: {roster[0].get('longName', roster[0].get('playerID', 'Unknown'))}")
+                elif away_roster_data.get("error"):
+                    st.sidebar.markdown(f"⚠️ Away roster error: {away_roster_data.get('error')}")
+                else:
+                    st.sidebar.markdown(f"⚠️ Away roster empty for {away_team_code}")
             else:
-                st.sidebar.markdown(f"❌ No away roster data for {away_team_code}")
+                st.sidebar.markdown(f"❌ No valid away roster data for {away_team_code}")
         
-        # Find home pitcher name from roster
+        # Find home pitcher name from roster - using correct structure based on docs
         home_pitcher_name = "Unknown Pitcher"
-        if home_roster_data and home_roster_data.get("body"):
-            for player in home_roster_data.get("body", []):
+        if (home_roster_data and home_roster_data.get("body") and 
+            home_roster_data.get("body").get("roster")):
+            
+            roster = home_roster_data.get("body").get("roster", [])
+            for player in roster:
                 if player.get("playerID") == home_pitcher_id:
                     home_pitcher_name = player.get("longName", "Unknown Pitcher")
                     break
@@ -417,8 +446,11 @@ def process_matchups(game_date=None):
                     
         # Find away pitcher name from roster
         away_pitcher_name = "Unknown Pitcher"
-        if away_roster_data and away_roster_data.get("body"):
-            for player in away_roster_data.get("body", []):
+        if (away_roster_data and away_roster_data.get("body") and 
+            away_roster_data.get("body").get("roster")):
+            
+            roster = away_roster_data.get("body").get("roster", [])
+            for player in roster:
                 if player.get("playerID") == away_pitcher_id:
                     away_pitcher_name = player.get("longName", "Unknown Pitcher")
                     break
@@ -457,10 +489,13 @@ def process_matchups(game_date=None):
                 if not batter_id:
                     continue
                 
-                # Find batter name from roster
+                # Find batter name from roster - using correct structure
                 batter_name = "Unknown Batter"
-                if away_roster_data and away_roster_data.get("body"):
-                    for player in away_roster_data.get("body", []):
+                if (away_roster_data and away_roster_data.get("body") and 
+                    away_roster_data.get("body").get("roster")):
+                    
+                    roster = away_roster_data.get("body").get("roster", [])
+                    for player in roster:
                         if player.get("playerID") == batter_id:
                             batter_name = player.get("longName", "Unknown Batter")
                             break
@@ -477,10 +512,13 @@ def process_matchups(game_date=None):
                 if not batter_id:
                     continue
                 
-                # Find batter name from roster
+                # Find batter name from roster - using correct structure
                 batter_name = "Unknown Batter"
-                if home_roster_data and home_roster_data.get("body"):
-                    for player in home_roster_data.get("body", []):
+                if (home_roster_data and home_roster_data.get("body") and 
+                    home_roster_data.get("body").get("roster")):
+                    
+                    roster = home_roster_data.get("body").get("roster", [])
+                    for player in roster:
                         if player.get("playerID") == batter_id:
                             batter_name = player.get("longName", "Unknown Batter")
                             break
@@ -490,10 +528,11 @@ def process_matchups(game_date=None):
                                game.get("gameTime", ""), all_matchups, True)
         else:
             # Process all away team batters vs home pitcher
-            if away_roster_data and away_roster_data.get("body"):
+            if (away_roster_data and away_roster_data.get("body") and 
+                away_roster_data.get("body").get("roster")):
                 # Filter out pitchers from the roster
-                away_batters = [p for p in away_roster_data.get("body", []) 
-                               if p.get("primaryPosition") != "P"]
+                roster = away_roster_data.get("body").get("roster", [])
+                away_batters = [p for p in roster if p.get("primaryPosition") != "P"]
                 
                 for batter in away_batters:
                     batter_id = batter.get("playerID")
@@ -509,10 +548,11 @@ def process_matchups(game_date=None):
                                    game.get("gameTime", ""), all_matchups, in_lineup)
             
             # Process all home team batters vs away pitcher
-            if home_roster_data and home_roster_data.get("body"):
+            if (home_roster_data and home_roster_data.get("body") and 
+                home_roster_data.get("body").get("roster")):
                 # Filter out pitchers from the roster
-                home_batters = [p for p in home_roster_data.get("body", []) 
-                               if p.get("primaryPosition") != "P"]
+                roster = home_roster_data.get("body").get("roster", [])
+                home_batters = [p for p in roster if p.get("primaryPosition") != "P"]
                 
                 for batter in home_batters:
                     batter_id = batter.get("playerID")
