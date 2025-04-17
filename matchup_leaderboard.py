@@ -42,15 +42,9 @@ if not RAPIDAPI_KEY:
     2. Subscribe to the [Tank01 MLB API](https://rapidapi.com/tank01/api/tank01-mlb-live-in-game-real-time-statistics/)
     3. Add your API key to the Streamlit secrets file (.streamlit/secrets.toml)
     """)
-    
-    # Show API endpoint info for debugging
-    st.sidebar.markdown("### API Endpoint Information")
-    st.sidebar.info("""
-    This app uses the following Tank01 API endpoints:
-    - /mlb/getBatterVsPitcher (for matchup data)
-    - /mlb/getGamesByDate (for today's games)
-    - /mlb/getTeamRoster (for team rosters)
-    """)
+
+# Add debug mode toggle
+debug_mode = st.sidebar.checkbox("Debug Mode")
 
 def fetch_from_rapidapi(endpoint, params=None):
     """Fetch data from Tank01 MLB API with caching"""
@@ -71,29 +65,25 @@ def fetch_from_rapidapi(endpoint, params=None):
                 with open(cache_file, 'r') as f:
                     return json.load(f)
             except Exception as e:
-                st.warning(f"Error reading cache: {str(e)}")
+                if debug_mode:
+                    st.warning(f"Error reading cache: {str(e)}")
     
-    # Prepare request - Fix: Make sure endpoint includes /mlb/ prefix per API docs
-    if not endpoint.startswith('/'):
-        endpoint = '/' + endpoint
-    if not endpoint.startswith('/mlb/'):
-        endpoint = '/mlb' + endpoint
-        
-    url = f"https://{RAPIDAPI_HOST}{endpoint}"
+    # Prepare request with the CORRECT endpoint format (no /mlb/ prefix)
+    url = f"https://{RAPIDAPI_HOST}/{endpoint}"
     headers = {
         "X-RapidAPI-Key": RAPIDAPI_KEY,
         "X-RapidAPI-Host": RAPIDAPI_HOST
     }
     
     try:
-        # Debug info
-        st.sidebar.markdown(f"Calling API: {url}")
-        st.sidebar.markdown(f"Params: {params}")
+        if debug_mode:
+            st.sidebar.markdown(f"Calling API: {url}")
+            st.sidebar.markdown(f"Params: {params}")
         
         response = requests.get(url, headers=headers, params=params, timeout=10)
         
-        # Debug info
-        st.sidebar.markdown(f"Status: {response.status_code}")
+        if debug_mode:
+            st.sidebar.markdown(f"Status: {response.status_code}")
         
         if response.status_code == 200:
             data = response.json()
@@ -104,35 +94,34 @@ def fetch_from_rapidapi(endpoint, params=None):
                 
             return data
         else:
-            st.error(f"API returned status code {response.status_code}: {response.text}")
+            if debug_mode:
+                st.error(f"API returned status code {response.status_code}: {response.text}")
             return None
     except Exception as e:
-        st.error(f"Error fetching data: {str(e)}")
+        if debug_mode:
+            st.error(f"Error fetching data: {str(e)}")
         return None
 
 def get_todays_games():
     """Get today's scheduled MLB games"""
     date_str = datetime.now().strftime('%Y%m%d')
     
-    # Using Tank01 API's game endpoint - corrected based on API docs
-    endpoint = "/mlb/getGamesByDate"
+    # Using Tank01 API's game endpoint - CORRECTED based on actual API format
+    endpoint = "getMLBGamesForDate"
     params = {
         "gameDate": date_str
     }
     
     games_data = fetch_from_rapidapi(endpoint, params)
     
-    # Debug info
-    if games_data:
+    if debug_mode and games_data:
         st.sidebar.markdown(f"Found {len(games_data.get('body', []))} games")
-    else:
-        st.sidebar.markdown("No games data returned")
     
     return games_data
 
 def get_team_roster(team_code):
     """Get roster for a team"""
-    endpoint = "/mlb/getTeamRoster"
+    endpoint = "getMLBRoster"
     params = {
         "teamAbr": team_code,
         "season": str(datetime.now().year)
@@ -140,9 +129,18 @@ def get_team_roster(team_code):
     
     return fetch_from_rapidapi(endpoint, params)
 
+def get_pitcher_for_team(team_code):
+    """Get probable pitcher for a team"""
+    endpoint = "getMLBProbablePitcher"
+    params = {
+        "team": team_code
+    }
+    
+    return fetch_from_rapidapi(endpoint, params)
+
 def get_batter_vs_pitcher(batter_id, pitcher_id):
     """Get batter vs pitcher matchup data"""
-    endpoint = "/mlb/getBatterVsPitcher"
+    endpoint = "getMLBBatterVsPitcher"
     params = {
         "batterID": str(batter_id),
         "pitcherID": str(pitcher_id)
@@ -154,7 +152,8 @@ def process_matchups():
     """Process all matchups for today's games"""
     games_data = get_todays_games()
     if not games_data or not games_data.get("body"):
-        st.warning("No games found for today or API error")
+        if debug_mode:
+            st.warning("No games found for today or API error")
         return []
     
     all_matchups = []
@@ -169,9 +168,11 @@ def process_matchups():
         progress = (i / total_games)
         progress_bar.progress(progress)
         
+        # The structure here depends on the actual API response
         home_team = game.get("homeTeam", {})
         away_team = game.get("awayTeam", {})
         
+        # Get team codes - adjust based on actual API response structure
         home_team_code = home_team.get("abbreviation")
         away_team_code = away_team.get("abbreviation")
         
@@ -180,10 +181,9 @@ def process_matchups():
         
         progress_text.text(f"Processing game {i+1} of {total_games}: {away_team_name} @ {home_team_name}")
         
-        # Get the probable pitchers
-        # Note: Tank01 API might not provide this directly, we might need to fetch them separately
-        home_pitcher_data = fetch_from_rapidapi("/mlb/getProbablePitcher", {"team": home_team_code})
-        away_pitcher_data = fetch_from_rapidapi("/mlb/getProbablePitcher", {"team": away_team_code})
+        # Get probable pitchers for each team
+        home_pitcher_data = get_pitcher_for_team(home_team_code)
+        away_pitcher_data = get_pitcher_for_team(away_team_code)
         
         # Extract pitcher information
         home_pitcher = None
@@ -200,6 +200,7 @@ def process_matchups():
             progress_text.text(f"Skipping game (no probable pitchers): {away_team_name} @ {home_team_name}")
             continue
             
+        # Get pitcher IDs and names
         home_pitcher_id = home_pitcher.get("playerID")
         away_pitcher_id = away_pitcher.get("playerID")
         
@@ -212,6 +213,7 @@ def process_matchups():
         
         # Process away team batters vs home pitcher
         if away_roster_data and away_roster_data.get("body"):
+            # Filter out pitchers from the roster
             away_batters = [p for p in away_roster_data.get("body", []) 
                            if p.get("primaryPosition") != "P"]
             
@@ -243,7 +245,9 @@ def process_matchups():
                                 "Pitcher": home_pitcher_name,
                                 "Pitcher ID": home_pitcher_id,
                                 "Team": away_team_name,
+                                "Team Code": away_team_code,
                                 "Opponent": home_team_name,
+                                "Opponent Code": home_team_code,
                                 "AB": ab,
                                 "H": hits,
                                 "HR": hr,
@@ -255,6 +259,7 @@ def process_matchups():
         
         # Process home team batters vs away pitcher
         if home_roster_data and home_roster_data.get("body"):
+            # Filter out pitchers from the roster
             home_batters = [p for p in home_roster_data.get("body", []) 
                            if p.get("primaryPosition") != "P"]
             
@@ -286,7 +291,9 @@ def process_matchups():
                                 "Pitcher": away_pitcher_name,
                                 "Pitcher ID": away_pitcher_id,
                                 "Team": home_team_name,
+                                "Team Code": home_team_code,
                                 "Opponent": away_team_name,
+                                "Opponent Code": away_team_code,
                                 "AB": ab,
                                 "H": hits,
                                 "HR": hr,
@@ -301,13 +308,17 @@ def process_matchups():
     progress_text.empty()
     
     # Sort by batting average (descending)
-    def get_avg(m):
+    def get_avg_float(m):
         try:
-            return float(str(m.get("AVG", "0.000")).replace('.', '0.'))
+            # Convert string AVG to float
+            avg_str = str(m.get("AVG", "0.000"))
+            if avg_str.startswith("."):
+                return float("0" + avg_str)
+            return float(avg_str)
         except ValueError:
             return 0.0
             
-    sorted_matchups = sorted(all_matchups, key=get_avg, reverse=True)
+    sorted_matchups = sorted(all_matchups, key=get_avg_float, reverse=True)
     
     return sorted_matchups
 
@@ -337,9 +348,6 @@ if st.sidebar.button("🔄 Refresh Data"):
     st.session_state.last_update = datetime.now()
     st.experimental_rerun()
 
-# Add debug mode toggle
-debug_mode = st.sidebar.checkbox("Debug Mode")
-
 # Main content
 if RAPIDAPI_KEY:
     # Use cached data if available, otherwise fetch new data
@@ -356,7 +364,10 @@ if RAPIDAPI_KEY:
         # Filter by user selections
         def get_avg_float(m):
             try:
-                return float(str(m.get("AVG", "0.000")).replace('.', '0.'))
+                avg_str = str(m.get("AVG", "0.000"))
+                if avg_str.startswith("."):
+                    return float("0" + avg_str)
+                return float(avg_str)
             except ValueError:
                 return 0.0
                 
@@ -462,7 +473,8 @@ if RAPIDAPI_KEY:
             # Test API connectivity
             st.subheader("API Connectivity Test")
             if st.button("Test API Connection"):
-                test_endpoint = "/mlb/help"
+                # Try a simple endpoint that should return data
+                test_endpoint = "getMLBHelp"
                 test_result = fetch_from_rapidapi(test_endpoint)
                 
                 if test_result:
