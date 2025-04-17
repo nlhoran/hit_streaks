@@ -338,75 +338,86 @@ def get_batter_vs_pitcher(batter_id, pitcher_id):
     if cache_key in st.session_state.matchup_cache:
         return st.session_state.matchup_cache[cache_key]
     
-    # Try multiple parameter formats and endpoints
-    attempts = [
-        # Format 1: batterID, pitcherID (standard)
-        {
-            "endpoint": "getMLBBatterVsPitcher",
-            "params": {"batterID": str(batter_id), "pitcherID": str(pitcher_id)}
-        },
-        # Format 2: batter, pitcher (alternate)
-        {
-            "endpoint": "getMLBBatterVsPitcher", 
-            "params": {"batter": str(batter_id), "pitcher": str(pitcher_id)}
-        },
-        # Format 3: mlbamIDBatter, mlbamIDPitcher (possible alternate)
-        {
-            "endpoint": "getMLBBatterVsPitcher",
-            "params": {"mlbamIDBatter": str(batter_id), "mlbamIDPitcher": str(pitcher_id)}
-        },
-        # Format 4: different endpoint
-        {
-            "endpoint": "getBatterVsPitcher",
-            "params": {"batterID": str(batter_id), "pitcherID": str(pitcher_id)}
-        }
-    ]
-    
-    # Only try a few requests at first to respect rate limits
-    max_attempts = min(2, len(attempts))
-    
-    # Track if we've already shown a message about no data for this matchup
-    no_data_shown = False
-    
-    for i, attempt in enumerate(attempts[:max_attempts]):
+    # Check if we've already fetched all matchup data for this batter
+    batter_cache_key = f"batter_{batter_id}"
+    if batter_cache_key not in st.session_state.matchup_cache:
+        # Get all matchups for this batter against all pitchers
         if debug_mode:
-            st.sidebar.markdown(f"Attempt {i+1}/{max_attempts}: {attempt['endpoint']} with {attempt['params']}")
+            st.sidebar.markdown(f"Fetching all matchups for batter {batter_id}")
         
-        matchup_data = fetch_from_rapidapi(attempt["endpoint"], attempt["params"])
+        endpoint = "getMLBBatterVsPitcher"
+        params = {"playerID": str(batter_id)}
         
-        # Check if we got valid data
-        if matchup_data and matchup_data.get("statusCode") == 200:
-            # Look for stats in different potential locations
-            has_stats = False
-            
-            # Try standard path
-            if matchup_data.get("body") and matchup_data.get("body").get("stats"):
-                stats = matchup_data.get("body").get("stats", {})
-                has_stats = True
-            # Try alternate structure where stats might be directly in body
-            elif matchup_data.get("body") and isinstance(matchup_data.get("body"), dict):
-                body = matchup_data.get("body")
-                if "atBats" in body or "hits" in body or "avg" in body:
-                    stats = body
-                    has_stats = True
-            
-            if has_stats:
-                if debug_mode:
-                    at_bats = stats.get("atBats", 0)
-                    hits = stats.get("hits", 0)
-                    avg = stats.get("avg", "0.000")
-                    st.sidebar.markdown(f"✅ BvP data found: AB={at_bats}, H={hits}, AVG={avg}")
-                    
-                # Cache this result
-                st.session_state.matchup_cache[cache_key] = matchup_data
-                return matchup_data
-            elif not no_data_shown and debug_mode:
-                st.sidebar.markdown("⚠️ API returned success but no stats found in response")
-                st.sidebar.json(matchup_data)
-                no_data_shown = True
+        all_matchups_data = fetch_from_rapidapi(endpoint, params)
+        
+        # Store in the cache
+        st.session_state.matchup_cache[batter_cache_key] = all_matchups_data
+    else:
+        # Use cached data
+        all_matchups_data = st.session_state.matchup_cache[batter_cache_key]
     
-    if debug_mode and not no_data_shown:
-        st.sidebar.markdown(f"❌ No matchup data found for batter {batter_id} vs pitcher {pitcher_id}")
+    # Now extract the specific matchup we want
+    if all_matchups_data and all_matchups_data.get("statusCode") == 200 and all_matchups_data.get("body"):
+        # The response might contain all matchups for this batter
+        matchups = all_matchups_data.get("body")
+        
+        if debug_mode:
+            st.sidebar.markdown(f"Looking for pitcher {pitcher_id} in batter {batter_id}'s matchups")
+            if isinstance(matchups, dict) and "matchups" in matchups:
+                st.sidebar.markdown(f"Found {len(matchups['matchups'])} matchups for batter {batter_id}")
+            elif isinstance(matchups, list):
+                st.sidebar.markdown(f"Found {len(matchups)} matchups for batter {batter_id}")
+            elif isinstance(matchups, dict):
+                st.sidebar.markdown(f"Matchup data structure: {list(matchups.keys())}")
+        
+        # Try to find the matchup with this pitcher
+        # Check different possible response structures
+        pitcher_matchup = None
+        
+        # Structure 1: { matchups: [{pitcher: id, stats: {}}] }
+        if isinstance(matchups, dict) and "matchups" in matchups:
+            for matchup in matchups["matchups"]:
+                if str(matchup.get("pitcher")) == str(pitcher_id):
+                    pitcher_matchup = matchup
+                    break
+                    
+        # Structure 2: { pitcherID: {stats} }
+        elif isinstance(matchups, dict) and str(pitcher_id) in matchups:
+            pitcher_matchup = {"stats": matchups[str(pitcher_id)]}
+            
+        # Structure 3: [{ pitcher: id, stats: {}}]
+        elif isinstance(matchups, list):
+            for matchup in matchups:
+                if str(matchup.get("pitcher")) == str(pitcher_id):
+                    pitcher_matchup = matchup
+                    break
+        
+        # If we found the matchup
+        if pitcher_matchup:
+            stats = pitcher_matchup.get("stats", {})
+            
+            if debug_mode:
+                at_bats = stats.get("atBats", 0)
+                hits = stats.get("hits", 0)
+                avg = stats.get("avg", "0.000")
+                st.sidebar.markdown(f"✅ Found matchup: Batter {batter_id} vs Pitcher {pitcher_id}: AB={at_bats}, H={hits}, AVG={avg}")
+            
+            result = {
+                "statusCode": 200,
+                "body": {"stats": stats}
+            }
+            
+            # Cache this result
+            st.session_state.matchup_cache[cache_key] = result
+            return result
+        elif debug_mode:
+            st.sidebar.markdown(f"❌ No matchup found between batter {batter_id} and pitcher {pitcher_id}")
+    elif debug_mode:
+        if all_matchups_data and all_matchups_data.get("error"):
+            st.sidebar.markdown(f"⚠️ API error: {all_matchups_data.get('error')}")
+            st.sidebar.json(all_matchups_data)
+        else:
+            st.sidebar.markdown("⚠️ No matchup data returned")
     
     # Create a fake result with minimal stats so the app can continue
     empty_result = {
