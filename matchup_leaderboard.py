@@ -136,14 +136,7 @@ def get_team_roster(team_code):
     
     return fetch_from_rapidapi(endpoint, params)
 
-def get_pitcher_for_team(team_code):
-    """Get probable pitcher for a team"""
-    endpoint = "getMLBProbablePitcher"
-    params = {
-        "team": team_code
-    }
-    
-    return fetch_from_rapidapi(endpoint, params)
+# No longer needed - we get pitchers directly from game data
 
 def get_batter_vs_pitcher(batter_id, pitcher_id):
     """Get batter vs pitcher matchup data"""
@@ -191,35 +184,39 @@ def process_matchups(game_date=None):
         
         progress_text.text(f"Processing game {i+1} of {total_games}: {away_team_name} @ {home_team_name}")
         
-        # Get probable pitchers for each team
-        home_pitcher_data = get_pitcher_for_team(home_team_code)
-        away_pitcher_data = get_pitcher_for_team(away_team_code)
+        # Extract probable pitchers directly from the game data
+        probable_pitchers = game.get("probableStartingPitchers", {})
         
-        # Extract pitcher information
-        home_pitcher = None
-        away_pitcher = None
-        
-        if home_pitcher_data and home_pitcher_data.get("body"):
-            home_pitcher = home_pitcher_data.get("body")
-        
-        if away_pitcher_data and away_pitcher_data.get("body"):
-            away_pitcher = away_pitcher_data.get("body")
+        # Extract home and away pitcher IDs
+        home_pitcher_id = probable_pitchers.get("home")
+        away_pitcher_id = probable_pitchers.get("away")
         
         # If we don't have probable pitchers, skip this game
-        if not home_pitcher or not away_pitcher:
+        if not home_pitcher_id or not away_pitcher_id:
             progress_text.text(f"Skipping game (no probable pitchers): {away_team_name} @ {home_team_name}")
             continue
             
-        # Get pitcher IDs and names
-        home_pitcher_id = home_pitcher.get("playerID")
-        away_pitcher_id = away_pitcher.get("playerID")
-        
-        home_pitcher_name = home_pitcher.get("longName", "Unknown Pitcher")
-        away_pitcher_name = away_pitcher.get("longName", "Unknown Pitcher")
-        
-        # Get team rosters
+        # Get roster data to find pitcher names
         home_roster_data = get_team_roster(home_team_code)
         away_roster_data = get_team_roster(away_team_code)
+        
+        # Find home pitcher name from roster
+        home_pitcher_name = "Unknown Pitcher"
+        if home_roster_data and home_roster_data.get("body"):
+            for player in home_roster_data.get("body", []):
+                if player.get("playerID") == home_pitcher_id:
+                    home_pitcher_name = player.get("longName", "Unknown Pitcher")
+                    break
+                    
+        # Find away pitcher name from roster
+        away_pitcher_name = "Unknown Pitcher"
+        if away_roster_data and away_roster_data.get("body"):
+            for player in away_roster_data.get("body", []):
+                if player.get("playerID") == away_pitcher_id:
+                    away_pitcher_name = player.get("longName", "Unknown Pitcher")
+                    break
+        
+        # We already have the roster data from above
         
         # Process away team batters vs home pitcher
         if away_roster_data and away_roster_data.get("body"):
