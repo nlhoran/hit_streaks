@@ -47,7 +47,7 @@ if not RAPIDAPI_KEY:
 debug_mode = st.sidebar.checkbox("Debug Mode")
 
 def fetch_from_rapidapi(endpoint, params=None):
-    """Fetch data from Tank01 MLB API with caching"""
+    """Fetch data from Tank01 MLB API with caching and rate limiting"""
     if not RAPIDAPI_KEY:
         st.error("RapidAPI key not configured")
         return None
@@ -68,7 +68,48 @@ def fetch_from_rapidapi(endpoint, params=None):
                 if debug_mode:
                     st.warning(f"Error reading cache: {str(e)}")
     
-    # Prepare request with the CORRECT endpoint format (no /mlb/ prefix)
+    # Rate limiting: check if we're making too many API calls
+    # Initialize API call counter in session state if needed
+    if "api_call_count" not in st.session_state:
+        st.session_state.api_call_count = 0
+        st.session_state.api_call_reset_time = time.time() + 60  # Reset after 1 minute
+    
+    # Check if we should reset the counter
+    current_time = time.time()
+    if current_time > st.session_state.api_call_reset_time:
+        st.session_state.api_call_count = 0
+        st.session_state.api_call_reset_time = current_time + 60  # Reset after 1 minute
+    
+    # Check if we're over the limit (20 calls per minute for Basic plan)
+    # Using 18 to be safe
+    MAX_CALLS_PER_MINUTE = 18
+    
+    if st.session_state.api_call_count >= MAX_CALLS_PER_MINUTE:
+        if debug_mode:
+            st.sidebar.warning(f"⚠️ Rate limit reached ({st.session_state.api_call_count} calls in the last minute). Using cached data or waiting.")
+        
+        # If this is a critical endpoint, wait and retry
+        critical_endpoints = ["getMLBTeams", "getMLBGamesForDate"]
+        if endpoint in critical_endpoints:
+            if debug_mode:
+                st.sidebar.info("Critical endpoint, waiting for rate limit reset...")
+            
+            # Wait until reset
+            sleep_time = st.session_state.api_call_reset_time - current_time
+            if sleep_time > 0:
+                time.sleep(sleep_time)
+                
+            # Reset counter
+            st.session_state.api_call_count = 0
+            st.session_state.api_call_reset_time = time.time() + 60
+        else:
+            # For non-critical endpoints, return cached data or None
+            return None
+    
+    # Increment API call counter
+    st.session_state.api_call_count += 1
+    
+    # Prepare request with the correct endpoint format
     url = f"https://{RAPIDAPI_HOST}/{endpoint}"
     headers = {
         "X-RapidAPI-Key": RAPIDAPI_KEY,
@@ -77,7 +118,7 @@ def fetch_from_rapidapi(endpoint, params=None):
     
     try:
         if debug_mode:
-            st.sidebar.markdown(f"Calling API: {url}")
+            st.sidebar.markdown(f"Calling API ({st.session_state.api_call_count}/{MAX_CALLS_PER_MINUTE}): {url}")
             st.sidebar.markdown(f"Params: {params}")
         
         response = requests.get(url, headers=headers, params=params, timeout=10)
@@ -93,13 +134,26 @@ def fetch_from_rapidapi(endpoint, params=None):
                 json.dump(data, f)
                 
             return data
+        elif response.status_code == 429:  # Too Many Requests
+            if debug_mode:
+                st.sidebar.error("📛 API Rate Limit Exceeded (429). Waiting...")
+            
+            # Wait for a minute
+            time.sleep(60)
+            
+            # Reset counter
+            st.session_state.api_call_count = 0
+            st.session_state.api_call_reset_time = time.time() + 60
+            
+            # Try again (recursively)
+            return fetch_from_rapidapi(endpoint, params)
         else:
             if debug_mode:
-                st.error(f"API returned status code {response.status_code}: {response.text}")
+                st.sidebar.error(f"API returned status code {response.status_code}: {response.text}")
             return None
     except Exception as e:
         if debug_mode:
-            st.error(f"Error fetching data: {str(e)}")
+            st.sidebar.error(f"Error fetching data: {str(e)}")
         return None
 
 def get_games_for_date(date=None):
@@ -284,47 +338,83 @@ def get_batter_vs_pitcher(batter_id, pitcher_id):
     if cache_key in st.session_state.matchup_cache:
         return st.session_state.matchup_cache[cache_key]
     
-    # Use the single, most likely correct endpoint based on other calls
-    endpoint = "getMLBBatterVsPitcher"
-    params = {
-        "batterID": str(batter_id),
-        "pitcherID": str(pitcher_id)
-    }
+    # Try multiple parameter formats and endpoints
+    attempts = [
+        # Format 1: batterID, pitcherID (standard)
+        {
+            "endpoint": "getMLBBatterVsPitcher",
+            "params": {"batterID": str(batter_id), "pitcherID": str(pitcher_id)}
+        },
+        # Format 2: batter, pitcher (alternate)
+        {
+            "endpoint": "getMLBBatterVsPitcher", 
+            "params": {"batter": str(batter_id), "pitcher": str(pitcher_id)}
+        },
+        # Format 3: mlbamIDBatter, mlbamIDPitcher (possible alternate)
+        {
+            "endpoint": "getMLBBatterVsPitcher",
+            "params": {"mlbamIDBatter": str(batter_id), "mlbamIDPitcher": str(pitcher_id)}
+        },
+        # Format 4: different endpoint
+        {
+            "endpoint": "getBatterVsPitcher",
+            "params": {"batterID": str(batter_id), "pitcherID": str(pitcher_id)}
+        }
+    ]
     
-    if debug_mode:
-        st.sidebar.markdown(f"Getting BvP data for batter {batter_id} vs pitcher {pitcher_id}")
+    # Only try a few requests at first to respect rate limits
+    max_attempts = min(2, len(attempts))
     
-    matchup_data = fetch_from_rapidapi(endpoint, params)
+    # Track if we've already shown a message about no data for this matchup
+    no_data_shown = False
     
-    # Check if we got valid data
-    if matchup_data and matchup_data.get("statusCode") == 200:
+    for i, attempt in enumerate(attempts[:max_attempts]):
         if debug_mode:
-            if matchup_data.get("body") and matchup_data.get("body").get("stats"):
-                stats = matchup_data.get("body", {}).get("stats", {})
-                st.sidebar.markdown(f"✅ BvP data found: AB={stats.get('atBats', 0)}, H={stats.get('hits', 0)}, AVG={stats.get('avg', '0.000')}")
-            elif matchup_data.get("error"):
-                st.sidebar.markdown(f"⚠️ API returned error: {matchup_data.get('error')}")
-            else:
-                st.sidebar.markdown("⚠️ API returned success but no matchup stats")
+            st.sidebar.markdown(f"Attempt {i+1}/{max_attempts}: {attempt['endpoint']} with {attempt['params']}")
         
-        # Cache this result
-        st.session_state.matchup_cache[cache_key] = matchup_data
-        return matchup_data
-    elif debug_mode:
-        if matchup_data:
-            st.sidebar.markdown(f"❌ BvP request failed: status={matchup_data.get('statusCode')}")
-            if matchup_data.get("error"):
-                st.sidebar.markdown(f"Error: {matchup_data.get('error')}")
-        else:
-            st.sidebar.markdown("❌ No response for BvP request")
+        matchup_data = fetch_from_rapidapi(attempt["endpoint"], attempt["params"])
+        
+        # Check if we got valid data
+        if matchup_data and matchup_data.get("statusCode") == 200:
+            # Look for stats in different potential locations
+            has_stats = False
+            
+            # Try standard path
+            if matchup_data.get("body") and matchup_data.get("body").get("stats"):
+                stats = matchup_data.get("body").get("stats", {})
+                has_stats = True
+            # Try alternate structure where stats might be directly in body
+            elif matchup_data.get("body") and isinstance(matchup_data.get("body"), dict):
+                body = matchup_data.get("body")
+                if "atBats" in body or "hits" in body or "avg" in body:
+                    stats = body
+                    has_stats = True
+            
+            if has_stats:
+                if debug_mode:
+                    at_bats = stats.get("atBats", 0)
+                    hits = stats.get("hits", 0)
+                    avg = stats.get("avg", "0.000")
+                    st.sidebar.markdown(f"✅ BvP data found: AB={at_bats}, H={hits}, AVG={avg}")
+                    
+                # Cache this result
+                st.session_state.matchup_cache[cache_key] = matchup_data
+                return matchup_data
+            elif not no_data_shown and debug_mode:
+                st.sidebar.markdown("⚠️ API returned success but no stats found in response")
+                st.sidebar.json(matchup_data)
+                no_data_shown = True
     
-    # If the call failed, return a valid but empty result
+    if debug_mode and not no_data_shown:
+        st.sidebar.markdown(f"❌ No matchup data found for batter {batter_id} vs pitcher {pitcher_id}")
+    
+    # Create a fake result with minimal stats so the app can continue
     empty_result = {
         "statusCode": 200,
         "body": {"stats": {"atBats": "0", "hits": "0", "avg": "0.000"}}
     }
     
-    # Cache this result to avoid repeated failures
+    # Cache this empty result to avoid redundant API calls
     st.session_state.matchup_cache[cache_key] = empty_result
     return empty_result
 
@@ -332,12 +422,27 @@ def process_matchups(game_date=None):
     """Process all matchups for the specified date"""
     if game_date is None:
         game_date = datetime.now()
-        
+    
+    # Progress status
+    status_placeholder = st.empty()
+    status_placeholder.info(f"Getting games for {game_date.strftime('%A, %B %d, %Y')}...")
+    
     games_data = get_games_for_date(game_date)
     if not games_data or not games_data.get("body"):
         if debug_mode:
             st.warning(f"No games found for {game_date.strftime('%Y-%m-%d')} or API error")
         return []
+    
+    # Show progress on how many games were found    
+    games = games_data.get("body", [])
+    status_placeholder.info(f"Found {len(games)} games. Processing...")
+        
+    # If there are too many games, limit the search to keep within rate limits
+    MAX_GAMES_TO_PROCESS = 6
+    if len(games) > MAX_GAMES_TO_PROCESS:
+        if debug_mode:
+            st.warning(f"⚠️ Limiting to {MAX_GAMES_TO_PROCESS} games due to API rate limits")
+        games = games[:MAX_GAMES_TO_PROCESS]
     
     all_matchups = []
     progress_bar = st.progress(0)
@@ -532,7 +637,16 @@ def process_matchups(game_date=None):
                 away_roster_data.get("body").get("roster")):
                 # Filter out pitchers from the roster
                 roster = away_roster_data.get("body").get("roster", [])
-                away_batters = [p for p in roster if p.get("primaryPosition") != "P"]
+                all_away_batters = [p for p in roster if p.get("primaryPosition") != "P"]
+                
+                # Limit batters per team to control API usage
+                MAX_BATTERS_PER_TEAM = 10
+                if len(all_away_batters) > MAX_BATTERS_PER_TEAM:
+                    if debug_mode:
+                        st.sidebar.warning(f"⚠️ Limiting to {MAX_BATTERS_PER_TEAM} batters due to API rate limits")
+                    away_batters = all_away_batters[:MAX_BATTERS_PER_TEAM]
+                else:
+                    away_batters = all_away_batters
                 
                 for batter in away_batters:
                     batter_id = batter.get("playerID")
@@ -552,7 +666,16 @@ def process_matchups(game_date=None):
                 home_roster_data.get("body").get("roster")):
                 # Filter out pitchers from the roster
                 roster = home_roster_data.get("body").get("roster", [])
-                home_batters = [p for p in roster if p.get("primaryPosition") != "P"]
+                all_home_batters = [p for p in roster if p.get("primaryPosition") != "P"]
+                
+                # Limit batters per team to control API usage
+                MAX_BATTERS_PER_TEAM = 10
+                if len(all_home_batters) > MAX_BATTERS_PER_TEAM:
+                    if debug_mode:
+                        st.sidebar.warning(f"⚠️ Limiting to {MAX_BATTERS_PER_TEAM} batters due to API rate limits")
+                    home_batters = all_home_batters[:MAX_BATTERS_PER_TEAM]
+                else:
+                    home_batters = all_home_batters
                 
                 for batter in home_batters:
                     batter_id = batter.get("playerID")
