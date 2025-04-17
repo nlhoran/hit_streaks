@@ -849,10 +849,17 @@ if RAPIDAPI_KEY:
         def get_avg_float(m):
             try:
                 avg_str = str(m.get("AVG", "0.000"))
+                if debug_mode and m.get("Batter"):
+                    st.sidebar.markdown(f"Converting AVG for {m.get('Batter')}: '{avg_str}'")
+                
+                # Handle different formats
                 if avg_str.startswith("."):
                     return float("0" + avg_str)
+                # Convert string values to float
                 return float(avg_str)
-            except ValueError:
+            except ValueError as e:
+                if debug_mode:
+                    st.sidebar.markdown(f"❌ Error converting AVG: {str(e)} for value: '{avg_str}'")
                 return 0.0
         
         if debug_mode:
@@ -865,8 +872,59 @@ if RAPIDAPI_KEY:
             # Show AB filter results
             ab_filtered = [m for m in matchups if int(m.get("AB", 0)) >= min_ab]
             st.sidebar.markdown(f"Matchups after AB filter ({min_ab}+): {len(ab_filtered)}")
+            
+            # Display some examples of matches that pass the AB filter
+            if len(ab_filtered) > 0 and len(ab_filtered) < 10:
+                for m in ab_filtered:
+                    avg_value = get_avg_float(m)
+                    passes_avg = avg_value >= min_avg
+                    st.sidebar.markdown(f"- {m.get('Batter')}: {m.get('AB')} AB, {m.get('AVG')} ({avg_value:.3f}) - Passes AVG filter: {passes_avg}")
                 
-        filtered_matchups = [m for m in matchups if int(m.get("AB", 0)) >= min_ab and get_avg_float(m) >= min_avg]
+        # Combined filter for AB and AVG    
+        filtered_matchups = []
+        has_valid_matchups = False
+        
+        for m in matchups:
+            try:
+                # Explicit conversion with debug output
+                try:
+                    ab = int(m.get("AB", 0))
+                except ValueError:
+                    if debug_mode:
+                        st.sidebar.markdown(f"❌ AB conversion failed for {m.get('Batter')}: '{m.get('AB')}'")
+                    ab = 0
+                
+                avg_str = str(m.get("AVG", "0.000"))
+                try:
+                    # Try both possible formats
+                    if avg_str.startswith("."):
+                        avg = float("0" + avg_str)
+                    else:
+                        avg = float(avg_str)
+                except ValueError:
+                    if debug_mode:
+                        st.sidebar.markdown(f"❌ AVG conversion failed for {m.get('Batter')}: '{avg_str}'")
+                    avg = 0.0
+                
+                # Show detailed debugging for the problematic matchup
+                if debug_mode and m.get("Batter") == "Salvador Perez":
+                    st.sidebar.markdown(f"⚠️ DEBUG - Salvador Perez values: AB={ab}, AVG={avg}, Raw AVG='{avg_str}'")
+                    st.sidebar.markdown(f"Filter checks: AB >= {min_ab} = {ab >= min_ab}, AVG >= {min_avg} = {avg >= min_avg}")
+                
+                if ab >= min_ab and avg >= min_avg:
+                    filtered_matchups.append(m)
+                    has_valid_matchups = True
+                elif debug_mode and ab >= min_ab and m.get("Batter"):
+                    # Show examples that pass AB but fail AVG filter
+                    st.sidebar.markdown(f"❌ {m.get('Batter')} failed AVG filter: {avg:.3f} < {min_avg:.3f}")
+            except Exception as e:
+                if debug_mode:
+                    st.sidebar.markdown(f"❌ Error filtering: {str(e)}")
+                    
+        # Force display of at least one matchup for debugging
+        if debug_mode and not has_valid_matchups and len(matchups) > 0:
+            st.sidebar.markdown("⚠️ Forcing display of first matchup for debugging")
+            filtered_matchups = [matchups[0]]
         
         if debug_mode:
             st.sidebar.markdown(f"Matchups after AVG filter ({min_avg}+): {len(filtered_matchups)}")
