@@ -187,12 +187,12 @@ def process_matchups(game_date=None):
         home_team = game.get("homeTeam", {})
         away_team = game.get("awayTeam", {})
         
-        # Get team codes - adjust based on actual API response structure
-        home_team_code = home_team.get("abbreviation")
-        away_team_code = away_team.get("abbreviation")
+        # Extract and format team information
+        home_team_code = home_team.get("abbreviation") or game.get("home")
+        away_team_code = away_team.get("abbreviation") or game.get("away")
         
-        home_team_name = home_team.get("name")
-        away_team_name = away_team.get("name")
+        home_team_name = home_team.get("name") or home_team_code
+        away_team_name = away_team.get("name") or away_team_code
         
         progress_text.text(f"Processing game {i+1} of {total_games}: {away_team_name} @ {home_team_name}")
         
@@ -218,7 +218,7 @@ def process_matchups(game_date=None):
                 st.sidebar.markdown(f"Skipping game due to missing pitcher(s): {away_team_name} @ {home_team_name}")
             continue
             
-        # Get roster data to find pitcher names
+        # Get roster data
         home_roster_data = get_team_roster(home_team_code)
         away_roster_data = get_team_roster(away_team_code)
         
@@ -238,103 +238,148 @@ def process_matchups(game_date=None):
                     away_pitcher_name = player.get("longName", "Unknown Pitcher")
                     break
         
-        # We already have the roster data from above
+        # Check if lineup data is available
+        has_lineup_data = False
+        probable_lineups = game.get("probableStartingLineups", {})
+        if probable_lineups and probable_lineups.get("away") and probable_lineups.get("home"):
+            has_lineup_data = len(probable_lineups.get("away", [])) > 0 and len(probable_lineups.get("home", [])) > 0
         
-        # Process away team batters vs home pitcher
-        if away_roster_data and away_roster_data.get("body"):
-            # Filter out pitchers from the roster
-            away_batters = [p for p in away_roster_data.get("body", []) 
-                           if p.get("primaryPosition") != "P"]
+        if debug_mode:
+            st.sidebar.markdown(f"Lineup data available: {has_lineup_data}")
+        
+        # Process batters - either from lineup (if available) or from full roster
+        # Create sets of lineup player IDs for easier lookup later
+        lineup_player_ids = set()
+        
+        if has_lineup_data:
+            # Add all lineup player IDs to the set
+            for player in probable_lineups.get("away", []):
+                if player.get("playerID"):
+                    lineup_player_ids.add(player.get("playerID"))
             
-            for batter in away_batters:
-                batter_id = batter.get("playerID")
-                batter_name = batter.get("longName", "")
+            for player in probable_lineups.get("home", []):
+                if player.get("playerID"):
+                    lineup_player_ids.add(player.get("playerID"))
+                    
+            # Process away lineup batters vs home pitcher
+            away_lineup = probable_lineups.get("away", [])
+            for lineup_slot in away_lineup:
+                batter_id = lineup_slot.get("playerID")
                 
                 if not batter_id:
                     continue
-                    
-                # Get batter vs pitcher matchup
-                matchup_data = get_batter_vs_pitcher(batter_id, home_pitcher_id)
                 
-                if matchup_data and matchup_data.get("body"):
-                    stats = matchup_data.get("body", {}).get("stats", {})
-                    
-                    try:
-                        ab = int(stats.get("atBats", 0))
-                        
-                        if ab >= 6:  # Apply minimum AB filter
-                            hits = int(stats.get("hits", 0))
-                            avg = stats.get("avg", "0.000")
-                            hr = int(stats.get("homeruns", 0))
-                            
-                            # Add to matchups list
-                            all_matchups.append({
-                                "Batter": batter_name,
-                                "Batter ID": batter_id,
-                                "Pitcher": home_pitcher_name,
-                                "Pitcher ID": home_pitcher_id,
-                                "Team": away_team_name,
-                                "Team Code": away_team_code,
-                                "Opponent": home_team_name,
-                                "Opponent Code": home_team_code,
-                                "AB": ab,
-                                "H": hits,
-                                "HR": hr,
-                                "AVG": avg,
-                                "Game Time": game.get("gameTime", "")
-                            })
-                    except (ValueError, TypeError):
-                        continue
-        
-        # Process home team batters vs away pitcher
-        if home_roster_data and home_roster_data.get("body"):
-            # Filter out pitchers from the roster
-            home_batters = [p for p in home_roster_data.get("body", []) 
-                           if p.get("primaryPosition") != "P"]
+                # Find batter name from roster
+                batter_name = "Unknown Batter"
+                if away_roster_data and away_roster_data.get("body"):
+                    for player in away_roster_data.get("body", []):
+                        if player.get("playerID") == batter_id:
+                            batter_name = player.get("longName", "Unknown Batter")
+                            break
+                
+                process_matchup(batter_id, batter_name, home_pitcher_id, home_pitcher_name, 
+                               away_team_name, away_team_code, home_team_name, home_team_code,
+                               game.get("gameTime", ""), all_matchups, True)
             
-            for batter in home_batters:
-                batter_id = batter.get("playerID")
-                batter_name = batter.get("longName", "")
+            # Process home lineup batters vs away pitcher
+            home_lineup = probable_lineups.get("home", [])
+            for lineup_slot in home_lineup:
+                batter_id = lineup_slot.get("playerID")
                 
                 if not batter_id:
                     continue
-                    
-                # Get batter vs pitcher matchup
-                matchup_data = get_batter_vs_pitcher(batter_id, away_pitcher_id)
                 
-                if matchup_data and matchup_data.get("body"):
-                    stats = matchup_data.get("body", {}).get("stats", {})
+                # Find batter name from roster
+                batter_name = "Unknown Batter"
+                if home_roster_data and home_roster_data.get("body"):
+                    for player in home_roster_data.get("body", []):
+                        if player.get("playerID") == batter_id:
+                            batter_name = player.get("longName", "Unknown Batter")
+                            break
+                
+                process_matchup(batter_id, batter_name, away_pitcher_id, away_pitcher_name, 
+                               home_team_name, home_team_code, away_team_name, away_team_code,
+                               game.get("gameTime", ""), all_matchups, True)
+        else:
+            # Process all away team batters vs home pitcher
+            if away_roster_data and away_roster_data.get("body"):
+                # Filter out pitchers from the roster
+                away_batters = [p for p in away_roster_data.get("body", []) 
+                               if p.get("primaryPosition") != "P"]
+                
+                for batter in away_batters:
+                    batter_id = batter.get("playerID")
+                    batter_name = batter.get("longName", "")
                     
-                    try:
-                        ab = int(stats.get("atBats", 0))
-                        
-                        if ab >= 6:  # Apply minimum AB filter
-                            hits = int(stats.get("hits", 0))
-                            avg = stats.get("avg", "0.000")
-                            hr = int(stats.get("homeruns", 0))
-                            
-                            # Add to matchups list
-                            all_matchups.append({
-                                "Batter": batter_name,
-                                "Batter ID": batter_id,
-                                "Pitcher": away_pitcher_name,
-                                "Pitcher ID": away_pitcher_id,
-                                "Team": home_team_name,
-                                "Team Code": home_team_code,
-                                "Opponent": away_team_name,
-                                "Opponent Code": away_team_code,
-                                "AB": ab,
-                                "H": hits,
-                                "HR": hr,
-                                "AVG": avg,
-                                "Game Time": game.get("gameTime", "")
-                            })
-                    except (ValueError, TypeError):
+                    if not batter_id:
                         continue
+                    
+                    in_lineup = batter_id in lineup_player_ids if has_lineup_data else False
+                    
+                    process_matchup(batter_id, batter_name, home_pitcher_id, home_pitcher_name, 
+                                   away_team_name, away_team_code, home_team_name, home_team_code,
+                                   game.get("gameTime", ""), all_matchups, in_lineup)
+            
+            # Process all home team batters vs away pitcher
+            if home_roster_data and home_roster_data.get("body"):
+                # Filter out pitchers from the roster
+                home_batters = [p for p in home_roster_data.get("body", []) 
+                               if p.get("primaryPosition") != "P"]
+                
+                for batter in home_batters:
+                    batter_id = batter.get("playerID")
+                    batter_name = batter.get("longName", "")
+                    
+                    if not batter_id:
+                        continue
+                    
+                    in_lineup = batter_id in lineup_player_ids if has_lineup_data else False
+                    
+                    process_matchup(batter_id, batter_name, away_pitcher_id, away_pitcher_name, 
+                                   home_team_name, home_team_code, away_team_name, away_team_code,
+                                   game.get("gameTime", ""), all_matchups, in_lineup)
     
     # Clear progress indicators
     progress_bar.empty()
     progress_text.empty()
+
+def process_matchup(batter_id, batter_name, pitcher_id, pitcher_name, 
+                   team_name, team_code, opponent_name, opponent_code, 
+                   game_time, all_matchups, in_lineup=False):
+    """Process a single batter vs pitcher matchup and add to results if relevant"""
+    # Get batter vs pitcher matchup data
+    matchup_data = get_batter_vs_pitcher(batter_id, pitcher_id)
+    
+    if matchup_data and matchup_data.get("body"):
+        stats = matchup_data.get("body", {}).get("stats", {})
+        
+        try:
+            ab = int(stats.get("atBats", 0))
+            
+            if ab >= 6:  # Apply minimum AB filter
+                hits = int(stats.get("hits", 0))
+                avg = stats.get("avg", "0.000")
+                hr = int(stats.get("homeruns", 0))
+                
+                # Add to matchups list
+                all_matchups.append({
+                    "Batter": batter_name,
+                    "Batter ID": batter_id,
+                    "Pitcher": pitcher_name,
+                    "Pitcher ID": pitcher_id,
+                    "Team": team_name,
+                    "Team Code": team_code,
+                    "Opponent": opponent_name,
+                    "Opponent Code": opponent_code,
+                    "AB": ab,
+                    "H": hits,
+                    "HR": hr,
+                    "AVG": avg,
+                    "Game Time": game_time,
+                    "In Lineup": in_lineup
+                })
+        except (ValueError, TypeError):
+            pass
     
     # Sort by batting average (descending)
     def get_avg_float(m):
@@ -445,7 +490,17 @@ if RAPIDAPI_KEY:
             df.insert(0, "Rank", range(1, len(df) + 1))
             
             # Display columns
-            display_cols = ["Rank", "Batter", "Team", "Pitcher", "Opponent", "AB", "H", "HR", "AVG"]
+            display_cols = ["Rank", "Batter", "Team", "Pitcher", "Opponent", "AB", "H", "HR", "AVG", "In Lineup"]
+            
+            # Add a filter for lineup status
+            show_only_in_lineup = st.checkbox("Show only confirmed lineup batters", value=False)
+            if show_only_in_lineup:
+                df = df[df["In Lineup"] == True]
+                if len(df) == 0:
+                    st.info("No confirmed lineup batters found with the current filters. Try adjusting your filters or unchecking the 'Show only confirmed lineup batters' option.")
+            
+            # Format the In Lineup column
+            df["In Lineup"] = df["In Lineup"].apply(lambda x: "✅" if x else "")
             
             # Two-column layout
             col1, col2 = st.columns([7, 3])
@@ -535,9 +590,10 @@ if RAPIDAPI_KEY:
             # Test API connectivity
             st.subheader("API Connectivity Test")
             if st.button("Test API Connection"):
-                # Try a simple endpoint that should return data
-                test_endpoint = "getMLBScoreboard"
-                test_result = fetch_from_rapidapi(test_endpoint)
+                # Try the games endpoint that we know works
+                test_endpoint = "getMLBGamesForDate"
+                test_params = {"gameDate": datetime.now().strftime('%Y%m%d')}
+                test_result = fetch_from_rapidapi(test_endpoint, test_params)
                 
                 if test_result:
                     st.success("API connection successful!")
