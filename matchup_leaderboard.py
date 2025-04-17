@@ -17,7 +17,7 @@ st.set_page_config(
 
 # App title 
 st.title("⚾ MLB Batter vs. Pitcher Matchups")
-st.markdown("Best batter vs. pitcher matchups for today's MLB games")
+st.markdown("Find the best batter vs. pitcher matchups for any MLB game day")
 
 # RapidAPI settings - You'll need to fill these in
 RAPIDAPI_KEY = st.secrets.get("RAPIDAPI_KEY", "")  # Store in Streamlit secrets
@@ -102,11 +102,15 @@ def fetch_from_rapidapi(endpoint, params=None):
             st.error(f"Error fetching data: {str(e)}")
         return None
 
-def get_todays_games():
-    """Get today's scheduled MLB games"""
-    date_str = datetime.now().strftime('%Y%m%d')
+def get_games_for_date(date=None):
+    """Get scheduled MLB games for a specific date"""
+    # Use provided date or default to today
+    if date is None:
+        date = datetime.now()
+        
+    date_str = date.strftime('%Y%m%d')
     
-    # Using Tank01 API's game endpoint - CORRECTED based on actual API format
+    # Using Tank01 API's game endpoint
     endpoint = "getMLBGamesForDate"
     params = {
         "gameDate": date_str
@@ -114,8 +118,11 @@ def get_todays_games():
     
     games_data = fetch_from_rapidapi(endpoint, params)
     
-    if debug_mode and games_data:
-        st.sidebar.markdown(f"Found {len(games_data.get('body', []))} games")
+    if debug_mode:
+        if games_data and games_data.get('body'):
+            st.sidebar.markdown(f"Found {len(games_data.get('body', []))} games for {date.strftime('%Y-%m-%d')}")
+        else:
+            st.sidebar.markdown(f"No games found for {date.strftime('%Y-%m-%d')}")
     
     return games_data
 
@@ -148,12 +155,15 @@ def get_batter_vs_pitcher(batter_id, pitcher_id):
     
     return fetch_from_rapidapi(endpoint, params)
 
-def process_matchups():
-    """Process all matchups for today's games"""
-    games_data = get_todays_games()
+def process_matchups(game_date=None):
+    """Process all matchups for the specified date"""
+    if game_date is None:
+        game_date = datetime.now()
+        
+    games_data = get_games_for_date(game_date)
     if not games_data or not games_data.get("body"):
         if debug_mode:
-            st.warning("No games found for today or API error")
+            st.warning(f"No games found for {game_date.strftime('%Y-%m-%d')} or API error")
         return []
     
     all_matchups = []
@@ -325,6 +335,39 @@ def process_matchups():
 # Sidebar controls
 st.sidebar.header("⚙️ Settings")
 
+# Date selection options
+st.sidebar.subheader("Game Date")
+date_option = st.sidebar.radio(
+    "Select Game Date",
+    options=["Today", "Tomorrow", "Custom Date"],
+    index=0
+)
+
+# Add a date input if custom date is selected
+if date_option == "Custom Date":
+    selected_date = st.sidebar.date_input(
+        "Select a Date",
+        value=datetime.now() + timedelta(days=2),
+        min_value=datetime.now(),
+        max_value=datetime.now() + timedelta(days=10)
+    )
+    game_date = selected_date
+elif date_option == "Tomorrow":
+    game_date = datetime.now() + timedelta(days=1)
+else:  # Today
+    game_date = datetime.now()
+
+# Show the selected date
+st.sidebar.info(f"Showing matchups for: {game_date.strftime('%A, %B %d, %Y')}")
+
+# Store the selected date in session state to avoid refresh issues
+if "selected_game_date" not in st.session_state or st.session_state.selected_game_date != game_date:
+    st.session_state.selected_game_date = game_date
+    # Clear existing data if date changes
+    st.session_state.matchup_data = None
+
+# Other filters
+st.sidebar.subheader("Matchup Filters")
 min_ab = st.sidebar.slider(
     "Minimum At Bats",
     min_value=5,
@@ -352,8 +395,8 @@ if st.sidebar.button("🔄 Refresh Data"):
 if RAPIDAPI_KEY:
     # Use cached data if available, otherwise fetch new data
     if st.session_state.matchup_data is None:
-        with st.spinner("Fetching today's matchups... (this may take a few minutes)"):
-            matchups = process_matchups()
+        with st.spinner(f"Fetching matchups for {game_date.strftime('%A, %B %d')}... (this may take a few minutes)"):
+            matchups = process_matchups(game_date)
             st.session_state.matchup_data = matchups
             st.session_state.last_update = datetime.now()
     else:
