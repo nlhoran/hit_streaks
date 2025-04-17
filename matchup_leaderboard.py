@@ -219,8 +219,27 @@ def process_matchups(game_date=None):
             continue
             
         # Get roster data
+        if debug_mode:
+            st.sidebar.markdown(f"Getting roster for home team: {home_team_code}")
+        
         home_roster_data = get_team_roster(home_team_code)
+        
+        if debug_mode:
+            st.sidebar.markdown(f"Getting roster for away team: {away_team_code}")
+        
         away_roster_data = get_team_roster(away_team_code)
+        
+        # Debug roster information
+        if debug_mode:
+            if home_roster_data and home_roster_data.get("body"):
+                st.sidebar.markdown(f"Home roster players: {len(home_roster_data.get('body', []))}")
+            else:
+                st.sidebar.markdown(f"❌ No home roster data for {home_team_code}")
+                
+            if away_roster_data and away_roster_data.get("body"):
+                st.sidebar.markdown(f"Away roster players: {len(away_roster_data.get('body', []))}")
+            else:
+                st.sidebar.markdown(f"❌ No away roster data for {away_team_code}")
         
         # Find home pitcher name from roster
         home_pitcher_name = "Unknown Pitcher"
@@ -230,6 +249,9 @@ def process_matchups(game_date=None):
                     home_pitcher_name = player.get("longName", "Unknown Pitcher")
                     break
                     
+            if debug_mode and home_pitcher_name == "Unknown Pitcher":
+                st.sidebar.markdown(f"❌ Could not find home pitcher {home_pitcher_id} in roster")
+                    
         # Find away pitcher name from roster
         away_pitcher_name = "Unknown Pitcher"
         if away_roster_data and away_roster_data.get("body"):
@@ -237,6 +259,9 @@ def process_matchups(game_date=None):
                 if player.get("playerID") == away_pitcher_id:
                     away_pitcher_name = player.get("longName", "Unknown Pitcher")
                     break
+                    
+            if debug_mode and away_pitcher_name == "Unknown Pitcher":
+                st.sidebar.markdown(f"❌ Could not find away pitcher {away_pitcher_id} in roster")
         
         # Check if lineup data is available
         has_lineup_data = False
@@ -350,36 +375,55 @@ def process_matchup(batter_id, batter_name, pitcher_id, pitcher_name,
     # Get batter vs pitcher matchup data
     matchup_data = get_batter_vs_pitcher(batter_id, pitcher_id)
     
+    if debug_mode:
+        st.sidebar.markdown(f"Processing matchup: {batter_name} vs {pitcher_name}")
+    
     if matchup_data and matchup_data.get("body"):
         stats = matchup_data.get("body", {}).get("stats", {})
+        
+        if debug_mode:
+            st.sidebar.markdown(f"Matchup stats found: {stats}")
         
         try:
             ab = int(stats.get("atBats", 0))
             
-            if ab >= 6:  # Apply minimum AB filter
-                hits = int(stats.get("hits", 0))
-                avg = stats.get("avg", "0.000")
-                hr = int(stats.get("homeruns", 0))
-                
-                # Add to matchups list
-                all_matchups.append({
-                    "Batter": batter_name,
-                    "Batter ID": batter_id,
-                    "Pitcher": pitcher_name,
-                    "Pitcher ID": pitcher_id,
-                    "Team": team_name,
-                    "Team Code": team_code,
-                    "Opponent": opponent_name,
-                    "Opponent Code": opponent_code,
-                    "AB": ab,
-                    "H": hits,
-                    "HR": hr,
-                    "AVG": avg,
-                    "Game Time": game_time,
-                    "In Lineup": in_lineup
-                })
-        except (ValueError, TypeError):
-            pass
+            if debug_mode:
+                st.sidebar.markdown(f"At bats: {ab}")
+            
+            # We'll collect ALL matchups and filter later with the slider
+            hits = int(stats.get("hits", 0))
+            avg = stats.get("avg", "0.000")
+            hr = int(stats.get("homeruns", 0))
+            
+            if debug_mode:
+                st.sidebar.markdown(f"✅ Adding matchup: {batter_name} ({hits}/{ab}, {avg})")
+            
+            # Add to matchups list
+            all_matchups.append({
+                "Batter": batter_name,
+                "Batter ID": batter_id,
+                "Pitcher": pitcher_name,
+                "Pitcher ID": pitcher_id,
+                "Team": team_name,
+                "Team Code": team_code,
+                "Opponent": opponent_name,
+                "Opponent Code": opponent_code,
+                "AB": ab,
+                "H": hits,
+                "HR": hr,
+                "AVG": avg,
+                "Game Time": game_time,
+                "In Lineup": in_lineup
+            })
+        except (ValueError, TypeError) as e:
+            if debug_mode:
+                st.sidebar.markdown(f"❌ Error processing stats: {str(e)}")
+    else:
+        if debug_mode:
+            if matchup_data:
+                st.sidebar.markdown(f"❌ No matchup data body: {matchup_data.get('statusCode')}")
+            else:
+                st.sidebar.markdown(f"❌ No matchup data returned")
     
     # Sort by batting average (descending)
     def get_avg_float(m):
@@ -434,7 +478,7 @@ if "selected_game_date" not in st.session_state or st.session_state.selected_gam
 st.sidebar.subheader("Matchup Filters")
 min_ab = st.sidebar.slider(
     "Minimum At Bats",
-    min_value=5,
+    min_value=1,
     max_value=30,
     value=6,
     step=1
@@ -442,7 +486,7 @@ min_ab = st.sidebar.slider(
 
 min_avg = st.sidebar.slider(
     "Minimum Batting Average",
-    min_value=0.200,
+    min_value=0.000,
     max_value=0.500,
     value=0.300,
     step=0.025,
@@ -477,8 +521,37 @@ if RAPIDAPI_KEY:
                 return float(avg_str)
             except ValueError:
                 return 0.0
+        
+        if debug_mode:
+            st.sidebar.markdown(f"Total matchups before filtering: {len(matchups)}")
+            if len(matchups) > 0:
+                # Display first matchup as example
+                st.sidebar.markdown("Sample matchup data:")
+                st.sidebar.json(matchups[0])
+                
+            # Show AB filter results
+            ab_filtered = [m for m in matchups if int(m.get("AB", 0)) >= min_ab]
+            st.sidebar.markdown(f"Matchups after AB filter ({min_ab}+): {len(ab_filtered)}")
                 
         filtered_matchups = [m for m in matchups if int(m.get("AB", 0)) >= min_ab and get_avg_float(m) >= min_avg]
+        
+        if debug_mode:
+            st.sidebar.markdown(f"Matchups after AVG filter ({min_avg}+): {len(filtered_matchups)}")
+            
+            # Display minimum AB filter settings
+            st.sidebar.markdown(f"Current filter settings: {min_ab}+ ABs, {min_avg}+ AVG")
+            
+            # Show how many hits each player had
+            ab_counts = {}
+            for m in matchups:
+                ab = int(m.get("AB", 0))
+                if ab not in ab_counts:
+                    ab_counts[ab] = 0
+                ab_counts[ab] += 1
+            
+            st.sidebar.markdown("AB distribution:")
+            for ab, count in sorted(ab_counts.items()):
+                st.sidebar.markdown(f"- {ab} ABs: {count} matchups")
         
         st.subheader(f"🔥 Top Batter vs. Pitcher Matchups Today ({len(filtered_matchups)})")
         
