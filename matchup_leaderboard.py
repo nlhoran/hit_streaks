@@ -138,120 +138,190 @@ def get_games_for_date(date=None):
     
     return games_data
 
-def get_team_roster(team_code):
-    """Get roster for a team"""
-    # Try the exact endpoint name format that worked for games
-    endpoint = "getMLBRoster"  # Try this endpoint name first
-    params = {
-        "teamAbr": team_code,
-        "season": str(datetime.now().year)
-    }
+def get_teams_data():
+    """Get all MLB teams data - might be needed to get team ID for roster queries"""
+    # Cache this data since it won't change frequently
+    if "teams_data" in st.session_state and st.session_state.teams_data:
+        return st.session_state.teams_data
+    
+    endpoint = "getMLBTeams"
+    params = {}  # No parameters needed
     
     if debug_mode:
-        st.sidebar.markdown(f"Trying roster endpoint 'getMLBRoster' for {team_code}")
+        st.sidebar.markdown("Fetching all MLB teams data")
     
-    roster_data = fetch_from_rapidapi(endpoint, params)
+    teams_data = fetch_from_rapidapi(endpoint, params)
     
-    # If that fails, try another common format with different parameter naming
-    if not roster_data or roster_data.get("statusCode") != 200:
+    if teams_data and teams_data.get("statusCode") == 200:
         if debug_mode:
-            st.sidebar.markdown(f"First roster endpoint failed, trying with different parameter name 'team'")
-        
-        params = {
-            "team": team_code,
-            "season": str(datetime.now().year)
-        }
-        roster_data = fetch_from_rapidapi(endpoint, params)
-    
-    # Try third format with both endpoint and parameter changes
-    if not roster_data or roster_data.get("statusCode") != 200:
+            st.sidebar.markdown(f"Successfully fetched MLB teams data")
+            
+        st.session_state.teams_data = teams_data
+        return teams_data
+    else:
         if debug_mode:
-            st.sidebar.markdown(f"Second roster attempt failed, trying 'getMLBTeamRoster'")
-        
-        endpoint = "getMLBTeamRoster"
-        params = {
-            "teamAbr": team_code,
-            "season": str(datetime.now().year)
-        }
-        roster_data = fetch_from_rapidapi(endpoint, params)
+            st.sidebar.markdown("Failed to fetch MLB teams data")
+        return None
+
+def get_team_id_from_abbreviation(team_code):
+    """Get team ID from team abbreviation"""
+    teams_data = get_teams_data()
     
-    # Try fourth format
-    if not roster_data or roster_data.get("statusCode") != 200:
+    if not teams_data or not teams_data.get("body"):
         if debug_mode:
-            st.sidebar.markdown(f"Third roster attempt failed, trying 'getTeamRoster'")
-        
-        endpoint = "getTeamRoster"
-        params = {
-            "teamAbr": team_code,
-            "season": str(datetime.now().year)
-        }
-        roster_data = fetch_from_rapidapi(endpoint, params)
+            st.sidebar.markdown(f"No teams data available to lookup ID for {team_code}")
+        return None
     
-    # Try fifth format with just team code
-    if not roster_data or roster_data.get("statusCode") != 200:
+    # Look for the team with matching abbreviation
+    for team in teams_data.get("body", []):
+        if team.get("abbreviation") == team_code:
+            team_id = team.get("teamID")
+            if debug_mode:
+                st.sidebar.markdown(f"Found team ID {team_id} for {team_code}")
+            return team_id
+    
+    if debug_mode:
+        st.sidebar.markdown(f"Could not find team ID for {team_code}")
+    return None
+
+def get_team_roster(team_code):
+    """Get roster for a team"""
+    # First, try to get the team ID if possible
+    team_id = get_team_id_from_abbreviation(team_code)
+    
+    # Try various combinations of endpoints and parameters
+    attempts = [
+        # First try with the team ID if available
+        {
+            "endpoint": "getMLBTeamRoster",
+            "params": {"teamID": team_id} if team_id else None,
+            "description": f"getMLBTeamRoster with teamID={team_id}" if team_id else None
+        },
+        # Try documentation-mentioned endpoint with team code
+        {
+            "endpoint": "getMLBTeamRoster",
+            "params": {"teamAbr": team_code},
+            "description": f"getMLBTeamRoster with teamAbr={team_code}"
+        },
+        # Try with just the team abbreviation
+        {
+            "endpoint": "getMLBTeamRoster", 
+            "params": {"team": team_code},
+            "description": f"getMLBTeamRoster with team={team_code}"
+        },
+        # Try alternative endpoint
+        {
+            "endpoint": "getMLBRoster",
+            "params": {"teamAbr": team_code},
+            "description": f"getMLBRoster with teamAbr={team_code}"
+        },
+        # Try with team abbreviation parameter
+        {
+            "endpoint": "getMLBRoster",
+            "params": {"team": team_code},
+            "description": f"getMLBRoster with team={team_code}"
+        },
+    ]
+    
+    # Try each combination until one works
+    for attempt in attempts:
+        if not attempt["params"]:
+            continue
+            
         if debug_mode:
-            st.sidebar.markdown(f"Fourth roster attempt failed, trying with only the team parameter")
+            st.sidebar.markdown(f"Trying {attempt['description']}")
         
-        endpoint = "getMLBRoster"
-        params = {
-            "team": team_code
-        }
-        roster_data = fetch_from_rapidapi(endpoint, params)
-    
-    # As a last resort, implement fallback roster data with just pitcher name
-    if not roster_data or roster_data.get("statusCode") != 200:
-        if debug_mode:
-            st.sidebar.markdown(f"All roster endpoints failed, using fallback data for {team_code}")
+        roster_data = fetch_from_rapidapi(attempt["endpoint"], attempt["params"])
         
-        # Create minimal fallback data just to allow the app to continue
-        roster_data = {
-            "statusCode": 200,
-            "body": []
-        }
+        if roster_data and roster_data.get("statusCode") == 200:
+            if debug_mode:
+                st.sidebar.markdown(f"✅ Success with {attempt['description']}")
+                # If body contains data, show sample
+                if roster_data.get("body") and len(roster_data.get("body")) > 0:
+                    st.sidebar.markdown(f"Found {len(roster_data.get('body'))} players")
+                    st.sidebar.markdown(f"Sample player: {roster_data.get('body')[0].get('longName', 'Unknown')}")
+            return roster_data
+        elif debug_mode:
+            status = roster_data.get("statusCode") if roster_data else "No response"
+            st.sidebar.markdown(f"❌ Failed with {attempt['description']}: {status}")
     
-    return roster_data
+    # As a last resort, implement fallback roster data
+    if debug_mode:
+        st.sidebar.markdown(f"All roster endpoints failed, using fallback data for {team_code}")
+    
+    # Create minimal fallback data just to allow the app to continue
+    return {
+        "statusCode": 200,
+        "body": []
+    }
 
 # No longer needed - we get pitchers directly from game data
 
 def get_batter_vs_pitcher(batter_id, pitcher_id):
     """Get batter vs pitcher matchup data"""
-    # Try first endpoint format
-    endpoint = "getMLBBatterVsPitcher"
-    params = {
-        "batterID": str(batter_id),
-        "pitcherID": str(pitcher_id)
+    # Create a cache key for this matchup
+    cache_key = f"{batter_id}_{pitcher_id}"
+    
+    # Check if we've already tried this matchup
+    if "matchup_cache" not in st.session_state:
+        st.session_state.matchup_cache = {}
+    
+    if cache_key in st.session_state.matchup_cache:
+        return st.session_state.matchup_cache[cache_key]
+    
+    # Try various combinations of endpoints and parameters
+    attempts = [
+        # First try with the standard parameter naming
+        {
+            "endpoint": "getMLBBatterVsPitcher",
+            "params": {"batterID": str(batter_id), "pitcherID": str(pitcher_id)},
+            "description": f"getMLBBatterVsPitcher with batterID/pitcherID"
+        },
+        # Try alternative parameter naming
+        {
+            "endpoint": "getMLBBatterVsPitcher", 
+            "params": {"batter": str(batter_id), "pitcher": str(pitcher_id)},
+            "description": f"getMLBBatterVsPitcher with batter/pitcher"
+        },
+        # Try alternative endpoint
+        {
+            "endpoint": "getBatterVsPitcher",
+            "params": {"batterID": str(batter_id), "pitcherID": str(pitcher_id)},
+            "description": f"getBatterVsPitcher with batterID/pitcherID"
+        },
+    ]
+    
+    # Try each combination until one works
+    for attempt in attempts:
+        if debug_mode:
+            st.sidebar.markdown(f"Trying {attempt['description']}")
+        
+        matchup_data = fetch_from_rapidapi(attempt["endpoint"], attempt["params"])
+        
+        if matchup_data and matchup_data.get("statusCode") == 200:
+            if debug_mode:
+                if matchup_data.get("body") and matchup_data.get("body").get("stats"):
+                    stats = matchup_data.get("body", {}).get("stats", {})
+                    st.sidebar.markdown(f"✅ Success with {attempt['description']}: AB={stats.get('atBats', 0)}, H={stats.get('hits', 0)}")
+                else:
+                    st.sidebar.markdown(f"✅ Success with {attempt['description']} but no stats data")
+            
+            # Cache this result
+            st.session_state.matchup_cache[cache_key] = matchup_data
+            return matchup_data
+        elif debug_mode:
+            status = matchup_data.get("statusCode") if matchup_data else "No response"
+            st.sidebar.markdown(f"❌ Failed with {attempt['description']}: {status}")
+    
+    # If all attempts failed, return an empty result
+    empty_result = {
+        "statusCode": 200,
+        "body": None
     }
     
-    if debug_mode:
-        st.sidebar.markdown(f"Trying BvP endpoint 'getMLBBatterVsPitcher'")
-    
-    matchup_data = fetch_from_rapidapi(endpoint, params)
-    
-    # Try second format with different parameter naming
-    if not matchup_data or matchup_data.get("statusCode") != 200:
-        if debug_mode:
-            st.sidebar.markdown(f"First BvP endpoint failed, trying with different parameter names")
-        
-        params = {
-            "batter": str(batter_id),
-            "pitcher": str(pitcher_id)
-        }
-        matchup_data = fetch_from_rapidapi(endpoint, params)
-    
-    # Try third format with different endpoint
-    if not matchup_data or matchup_data.get("statusCode") != 200:
-        if debug_mode:
-            st.sidebar.markdown(f"Second BvP attempt failed, trying 'getBatterVsPitcher'")
-        
-        endpoint = "getBatterVsPitcher"
-        params = {
-            "batterID": str(batter_id),
-            "pitcherID": str(pitcher_id)
-        }
-        matchup_data = fetch_from_rapidapi(endpoint, params)
-    
-    # Return whatever we have at this point
-    return matchup_data
+    # Cache this result to avoid repeated failures
+    st.session_state.matchup_cache[cache_key] = empty_result
+    return empty_result
 
 def process_matchups(game_date=None):
     """Process all matchups for the specified date"""
