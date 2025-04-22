@@ -217,7 +217,7 @@ def generate_demo_data():
     # Create DataFrame
     df = pd.DataFrame(players)
     
-    # Generate realistic stats
+    # Generate realistic stats - ensure all columns have valid values
     player_count = len(df)
     df['AB'] = np.random.randint(60, 120, player_count)
     df['H'] = (np.random.uniform(0.250, 0.350, player_count) * df['AB']).astype(int)
@@ -226,6 +226,13 @@ def generate_demo_data():
     df['3B'] = np.random.randint(0, 3, player_count)
     df['HR'] = np.random.randint(1, 10, player_count)
     df['AVG'] = [f".{random.randint(240, 330)}" for _ in range(player_count)]
+    
+    # Fill any potential NaN values with reasonable defaults
+    default_values = {
+        'AB': 0, 'H': 0, 'BB': 0, '2B': 0, '3B': 0, 'HR': 0, 
+        'AVG': '.000', '1B': 0
+    }
+    df = df.fillna(default_values)
     
     # Calculate singles (1B)
     for idx, row in df.iterrows():
@@ -240,12 +247,19 @@ def generate_demo_data():
                     random.randint(6, 10), random.randint(10, 15), 
                     random.randint(15, 25)]
     
-    # Generate streaks with weighted distribution
+    # Generate streaks with weighted distribution - ensure no NaN values
     current_streaks = [np.random.choice(streak_values, p=streak_weights) for _ in range(player_count)]
     df['Current_Streak'] = current_streaks
     df['Max_Hit_Streak'] = [max(streak, random.randint(streak, min(streak + 8, 30))) for streak in current_streaks]
     df['Games_With_Hit'] = [max(streak, random.randint(streak, min(streak + 25, 50))) for streak in df['Max_Hit_Streak']]
-    df['Last_15'] = [random.randint(max(5, streak), min(15, streak + 10)) for streak in current_streaks]
+    
+    # For Last_15, ensure all values are integers between 0-15
+    df['Last_15'] = [min(15, max(0, random.randint(max(5, streak), min(15, streak + 10)))) for streak in current_streaks]
+    
+    # Fill any potential NaN values with zeros
+    streak_columns = ['Current_Streak', 'Max_Hit_Streak', 'Games_With_Hit', 'Last_15']
+    for col in streak_columns:
+        df[col] = df[col].fillna(0).astype(int)
     
     # Sort by games with hit in last 15 games
     df = df.sort_values('Last_15', ascending=False)
@@ -290,12 +304,22 @@ else:
 if streak_data is not None and not streak_data.empty:
     # Check if we have Last_15 data, if not try to add it
     if 'Last_15' not in streak_data.columns:
+        # Add a safe Last_15 column
+        streak_data['Last_15'] = 0  # Initialize with zeros
+        
         if 'Last_10' in streak_data.columns:
-            # Convert Last_10 to Last_15 with a slight boost
-            streak_data['Last_15'] = (streak_data['Last_10'] * 1.5).clip(upper=15).astype(int)
-        else:
-            # Generate a reasonable estimate based on other data
-            streak_data['Last_15'] = (streak_data['Games_With_Hit'] * 0.3).clip(upper=15).astype(int)
+            # Safely convert Last_10 to Last_15 with a boost
+            streak_data['Last_15'] = streak_data['Last_10'].fillna(0).apply(
+                lambda x: min(int(x * 1.5), 15)
+            )
+        elif 'Games_With_Hit' in streak_data.columns:
+            # Generate a reasonable estimate based on Games_With_Hit
+            streak_data['Last_15'] = streak_data['Games_With_Hit'].fillna(0).apply(
+                lambda x: min(int(x * 0.3), 15)
+            )
+        
+        # Ensure the column is integer type with no NaN values
+        streak_data['Last_15'] = streak_data['Last_15'].fillna(0).astype(int)
     
     # Filter by minimum games with hit in last 15 games
     filtered_data = streak_data[streak_data['Last_15'] >= min_games_with_hit]
