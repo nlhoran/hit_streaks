@@ -16,8 +16,8 @@ st.set_page_config(
 )
 
 # App title 
-st.title("⚾ MLB Hit Streak Leaderboard")
-st.markdown("Current active hit streaks in Major League Baseball")
+st.title("⚾ MLB Games with Hit Leaderboard")
+st.markdown("Players with the most games with at least one hit (last 15 games)")
 
 # Initialize session state for caching
 if "streak_data" not in st.session_state:
@@ -164,15 +164,15 @@ def fetch_hit_streaks(player_ids, start_date, end_date):
                     # Current streak is the current value of streak if last games had hits
                     current_streak = streak
                     
-                    # Get last ten games streak
-                    last_10_hits = sum([g['had_hit'] for g in games[-10:]]) if len(games) >= 10 else sum([g['had_hit'] for g in games])
+                    # Get last 15 games with hit
+                    last_15_hits = sum([g['had_hit'] for g in games[-15:]]) if len(games) >= 15 else sum([g['had_hit'] for g in games])
                     
                     all_streak_data.append({
                         'playerid': player_id,
                         'Games_With_Hit': games_with_hit,
                         'Current_Streak': current_streak,
                         'Max_Hit_Streak': max_streak,
-                        'Last_10': last_10_hits
+                        'Last_15': last_15_hits
                     })
             
         except Exception as e:
@@ -245,10 +245,10 @@ def generate_demo_data():
     df['Current_Streak'] = current_streaks
     df['Max_Hit_Streak'] = [max(streak, random.randint(streak, min(streak + 8, 30))) for streak in current_streaks]
     df['Games_With_Hit'] = [max(streak, random.randint(streak, min(streak + 25, 50))) for streak in df['Max_Hit_Streak']]
-    df['Last_10'] = [random.randint(max(3, streak - 4), min(10, streak + 5)) for streak in current_streaks]
+    df['Last_15'] = [random.randint(max(5, streak), min(15, streak + 10)) for streak in current_streaks]
     
-    # Sort by current streak
-    df = df.sort_values('Current_Streak', ascending=False)
+    # Sort by games with hit in last 15 games
+    df = df.sort_values('Last_15', ascending=False)
     
     return df
 
@@ -260,18 +260,18 @@ data_source = st.sidebar.radio(
     index=0
 )
 
-min_streak = st.sidebar.slider(
-    "Minimum Streak Length",
-    min_value=0,
+min_games_with_hit = st.sidebar.slider(
+    "Minimum Games with Hit (out of 15)",
+    min_value=1,
     max_value=15,
-    value=1,
+    value=5,
     step=1
 )
 
 # Add a refresh button
 if st.sidebar.button("🔄 Refresh Data"):
     st.session_state.streak_data = None
-    st.experimental_rerun()
+    st.rerun()
 
 # Main content - Load data
 if data_source == "MLB Data":
@@ -288,12 +288,15 @@ else:
 
 # Process and display data
 if streak_data is not None and not streak_data.empty:
-    # Filter by minimum streak
-    filtered_data = streak_data[streak_data['Current_Streak'] >= min_streak]
+    # Filter by minimum games with hit in last 15 games
+    filtered_data = streak_data[streak_data['Last_15'] >= min_games_with_hit]
+    
+    # Sort by games with hit in last 15 games (descending)
+    filtered_data = filtered_data.sort_values('Last_15', ascending=False)
     
     if not filtered_data.empty:
-        # Show active streaks section
-        st.subheader(f"🔥 Active Hit Streaks ({len(filtered_data)} players)")
+        # Show games with hit section
+        st.subheader(f"🔥 Top Players by Games with Hit ({len(filtered_data)} players)")
         
         # Create two columns for main display and sidebar
         col1, col2 = st.columns([7, 3])
@@ -303,16 +306,16 @@ if streak_data is not None and not streak_data.empty:
             display_df = filtered_data.copy()
             
             # Select and rename columns for the main table
-            table_df = display_df[['Name', 'Team', 'position', 'Current_Streak', 'Last_10', 'Max_Hit_Streak', 'AVG']]
+            table_df = display_df[['Name', 'Team', 'position', 'Last_15', 'Current_Streak', 'Max_Hit_Streak', 'AVG']]
             
             # Add rank column
             table_df.insert(0, 'Rank', range(1, len(table_df) + 1))
             
             # Rename columns for display
             column_rename = {
+                'Last_15': 'Games with Hit (Last 15)',
                 'Current_Streak': 'Current Streak',
-                'Max_Hit_Streak': 'Season Best',
-                'Last_10': 'Hits in Last 10',
+                'Max_Hit_Streak': 'Season Best Streak',
                 'position': 'Pos',
                 'AVG': 'Avg'
             }
@@ -326,24 +329,24 @@ if streak_data is not None and not streak_data.empty:
         with col2:
             st.subheader("Player Links")
             
-            # Top 5 streaks get highlighted
+            # Top 5 players get highlighted
             top_n = min(5, len(filtered_data))
             top_players = filtered_data.head(top_n)
             
             for _, row in top_players.iterrows():
-                st.markdown(f"**[{row['Name']}](https://www.mlb.com/player/{row['playerid']})** - {row['Current_Streak']} games")
+                st.markdown(f"**[{row['Name']}](https://www.mlb.com/player/{row['playerid']})** - {row['Last_15']}/15 games with hit")
             
             # Rest of the players
             if len(filtered_data) > top_n:
                 st.markdown("---")
                 for _, row in filtered_data.iloc[top_n:].iterrows():
-                    st.markdown(f"[{row['Name']}](https://www.mlb.com/player/{row['playerid']}) - {row['Current_Streak']} games")
+                    st.markdown(f"[{row['Name']}](https://www.mlb.com/player/{row['playerid']}) - {row['Last_15']}/15 games with hit")
                 
         # Add DiMaggio reference
         st.markdown("---")
         st.markdown("#### Joe DiMaggio's MLB record is 56 consecutive games with a hit (1941)")
     else:
-        st.info(f"No active hit streaks of {min_streak} games or more. Try lowering the minimum streak length.")
+        st.info(f"No players with {min_games_with_hit} or more games with a hit in the last 15 games. Try lowering the minimum value.")
 else:
     st.error("No data available. Please try a different data source or check connectivity.")
 
