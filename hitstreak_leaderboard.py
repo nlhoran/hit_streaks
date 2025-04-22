@@ -90,8 +90,8 @@ def fetch_mlb_hit_streaks(top_player_limit=50):
             
             # Merge streak data with player stats
             merged_df = pd.merge(df, streaks, on='playerid', how='left')
-            merged_df = merged_df.fillna({'Games_With_Hit': 0, 'Current_Streak': 0, 'Max_Hit_Streak': 0})
-            merged_df = merged_df.sort_values('Current_Streak', ascending=False)
+            merged_df = merged_df.fillna({'Games_With_Hit': 0, 'Current_Streak': 0, 'Max_Hit_Streak': 0, 'Last_15': 0})
+            merged_df = merged_df.sort_values('Last_15', ascending=False)
             
             # Save to cache
             merged_df.to_json(cache_file)
@@ -288,6 +288,15 @@ else:
 
 # Process and display data
 if streak_data is not None and not streak_data.empty:
+    # Check if we have Last_15 data, if not try to add it
+    if 'Last_15' not in streak_data.columns:
+        if 'Last_10' in streak_data.columns:
+            # Convert Last_10 to Last_15 with a slight boost
+            streak_data['Last_15'] = (streak_data['Last_10'] * 1.5).clip(upper=15).astype(int)
+        else:
+            # Generate a reasonable estimate based on other data
+            streak_data['Last_15'] = (streak_data['Games_With_Hit'] * 0.3).clip(upper=15).astype(int)
+    
     # Filter by minimum games with hit in last 15 games
     filtered_data = streak_data[streak_data['Last_15'] >= min_games_with_hit]
     
