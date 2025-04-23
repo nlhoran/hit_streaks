@@ -28,7 +28,7 @@ CACHE_DIR = "mlb_streak_cache"
 os.makedirs(CACHE_DIR, exist_ok=True)
 
 # Function to fetch MLB hit streak data with caching
-def fetch_mlb_hit_streaks(top_player_limit=50):
+def fetch_mlb_hit_streaks(top_player_limit=100):  # Increased default limit
     """Fetch current hit streak data from MLB Stats API with fallback to cached data"""
     cache_file = os.path.join(CACHE_DIR, "current_streaks.json")
     cache_time = 3600  # 1 hour cache
@@ -77,8 +77,18 @@ def fetch_mlb_hit_streaks(top_player_limit=50):
             # Create DataFrame
             df = pd.DataFrame(players)
             
-            # Fetch hit streak information for top hitters by hits (limited to improve performance)
-            top_hitters = df.sort_values('H', ascending=False).head(top_player_limit)
+            # Use multiple selection criteria to identify players to track
+            # This ensures we capture different types of hitters (volume, hot streak, etc)
+            hits_sorted = df.sort_values('H', ascending=False).head(int(top_player_limit * 0.6))  # 60% - volume hitters
+            avg_sorted = df[~df['playerid'].isin(hits_sorted['playerid'])].sort_values('AVG', ascending=False).head(int(top_player_limit * 0.3))  # 30% - high average hitters
+            
+            # For the remaining 10%, include some random players to catch streaky hitters who might not qualify by other metrics
+            remaining_players = df[~df['playerid'].isin(pd.concat([hits_sorted, avg_sorted])['playerid'])]
+            if not remaining_players.empty:
+                random_sample = remaining_players.sample(min(int(top_player_limit * 0.1), len(remaining_players)))
+                top_hitters = pd.concat([hits_sorted, avg_sorted, random_sample])
+            else:
+                top_hitters = pd.concat([hits_sorted, avg_sorted])
             
             # Get today's date for streak calculation
             today = datetime.now()
@@ -190,8 +200,9 @@ def generate_demo_data():
     """Generate realistic demo data with current MLB players"""
     st.info("Using demo data with realistic current MLB player information")
     
-    # Current top MLB players (2024 season)
+    # Current top MLB players (2024 season) including hot hitters and streaky players
     players = [
+        # Star hitters
         {"Name": "Gunnar Henderson", "Team": "BAL", "playerid": 683002, "position": "SS"},
         {"Name": "Shohei Ohtani", "Team": "LAD", "playerid": 660271, "position": "DH"},
         {"Name": "Aaron Judge", "Team": "NYY", "playerid": 592450, "position": "RF"},
@@ -212,6 +223,23 @@ def generate_demo_data():
         {"Name": "Corbin Carroll", "Team": "ARI", "playerid": 682998, "position": "CF"},
         {"Name": "Luis Robert Jr.", "Team": "CWS", "playerid": 673357, "position": "CF"},
         {"Name": "Vladimir Guerrero Jr.", "Team": "TOR", "playerid": 665489, "position": "1B"},
+        
+        # Players of interest (players known for hot streaks or contact hitting)
+        {"Name": "Cedric Mullins", "Team": "BAL", "playerid": 656775, "position": "CF"},
+        {"Name": "Kyle Tucker", "Team": "HOU", "playerid": 663656, "position": "RF"},
+        {"Name": "Luis Arraez", "Team": "SDP", "playerid": 650333, "position": "2B"},
+        {"Name": "Jarren Duran", "Team": "BOS", "playerid": 680776, "position": "CF"},
+        {"Name": "Trea Turner", "Team": "PHI", "playerid": 607208, "position": "SS"},
+        {"Name": "Bo Bichette", "Team": "TOR", "playerid": 666182, "position": "SS"},
+        {"Name": "William Contreras", "Team": "MIL", "playerid": 661388, "position": "C"},
+        {"Name": "Jose Altuve", "Team": "HOU", "playerid": 514888, "position": "2B"},
+        {"Name": "Ketel Marte", "Team": "ARI", "playerid": 606466, "position": "2B"},
+        {"Name": "J.P. Crawford", "Team": "SEA", "playerid": 641487, "position": "SS"},
+        {"Name": "Brandon Nimmo", "Team": "NYM", "playerid": 607043, "position": "CF"},
+        {"Name": "Riley Greene", "Team": "DET", "playerid": 682985, "position": "CF"},
+        {"Name": "Bryan Reynolds", "Team": "PIT", "playerid": 668804, "position": "CF"},
+        {"Name": "Anthony Santander", "Team": "BAL", "playerid": 623993, "position": "RF"},
+        {"Name": "Christopher Morel", "Team": "CHC", "playerid": 666624, "position": "3B"},
     ]
     
     # Create DataFrame
@@ -256,6 +284,14 @@ def generate_demo_data():
     # For Last_15, ensure all values are integers between 0-15
     df['Last_15'] = [min(15, max(0, random.randint(max(5, streak), min(15, streak + 10)))) for streak in current_streaks]
     
+    # Give hot streaks to certain players of interest (like Cedric Mullins)
+    players_of_interest = ["Cedric Mullins", "Luis Arraez", "Steven Kwan", "Kyle Tucker"]
+    for player in players_of_interest:
+        if player in df['Name'].values:
+            player_idx = df[df['Name'] == player].index[0]
+            # Ensure they have a higher Last_15 value (10-15 range)
+            df.at[player_idx, 'Last_15'] = random.randint(10, 15)
+    
     # Fill any potential NaN values with zeros
     streak_columns = ['Current_Streak', 'Max_Hit_Streak', 'Games_With_Hit', 'Last_15']
     for col in streak_columns:
@@ -282,6 +318,18 @@ min_games_with_hit = st.sidebar.slider(
     step=1
 )
 
+# Add player search functionality to find specific players
+player_search = st.sidebar.text_input("🔍 Search for a player by name")
+
+# Add a "Players to Watch" section with common players of interest
+st.sidebar.markdown("#### Players to Watch")
+st.sidebar.caption("Quickly find these specific players")
+watch_players = st.sidebar.multiselect(
+    "Select players",
+    options=["Cedric Mullins", "Aaron Judge", "Shohei Ohtani", "Juan Soto", "Kyle Tucker", "Luis Arraez", "Steven Kwan"],
+    default=[]
+)
+
 # Add a refresh button
 if st.sidebar.button("🔄 Refresh Data"):
     st.session_state.streak_data = None
@@ -293,8 +341,8 @@ if data_source == "MLB Data":
     if st.session_state.streak_data is not None:
         streak_data = st.session_state.streak_data
     else:
-        # Fetch new data
-        streak_data = fetch_mlb_hit_streaks(top_player_limit=50)
+        # Fetch new data with larger sample size to capture more hot hitters
+        streak_data = fetch_mlb_hit_streaks(top_player_limit=100)
         st.session_state.streak_data = streak_data
 else:
     # Use demo data
@@ -323,6 +371,16 @@ if streak_data is not None and not streak_data.empty:
     
     # Filter by minimum games with hit in last 15 games
     filtered_data = streak_data[streak_data['Last_15'] >= min_games_with_hit]
+    
+    # Apply player search filter if provided
+    if player_search:
+        search_term = player_search.lower()
+        # Use case-insensitive search on player names
+        filtered_data = filtered_data[filtered_data['Name'].str.lower().str.contains(search_term)]
+    
+    # Apply filter for "Players to Watch" if any are selected
+    elif watch_players:
+        filtered_data = filtered_data[filtered_data['Name'].isin(watch_players)]
     
     # Sort by games with hit in last 15 games (descending)
     filtered_data = filtered_data.sort_values('Last_15', ascending=False)
@@ -379,7 +437,23 @@ if streak_data is not None and not streak_data.empty:
         st.markdown("---")
         st.markdown("#### Joe DiMaggio's MLB record is 56 consecutive games with a hit (1941)")
     else:
-        st.info(f"No players with {min_games_with_hit} or more games with a hit in the last 15 games. Try lowering the minimum value.")
+        st.info("No players found matching your criteria.")
+        
+        # Provide helpful suggestions based on what filters are active
+        suggestions = []
+        if min_games_with_hit > 1:
+            suggestions.append(f"• Lower the 'Minimum Games with Hit' value (currently {min_games_with_hit})")
+        if player_search:
+            suggestions.append(f"• Try a different player search term (current search: '{player_search}')")
+        if watch_players:
+            suggestions.append(f"• Select different players from the 'Players to Watch' list")
+        if not suggestions:
+            suggestions.append("• Click the 'Refresh Data' button to reload the latest data")
+            
+        if suggestions:
+            st.markdown("### Try these adjustments:")
+            for suggestion in suggestions:
+                st.markdown(suggestion)
 else:
     st.error("No data available. Please try a different data source or check connectivity.")
 
